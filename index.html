@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Container Load Planner</title>
+<meta name="description" content="Plan carton loads for 20' GP, 40' HQ and 45' HQ containers and 53' trailers, with a 3D load view and a step-by-step stacking plan.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0e14'/%3E%3Cpath d='M7 11h18v11H7z' fill='none' stroke='%237f93ff' stroke-width='2'/%3E%3Cpath d='M11 13.5v6M14.5 13.5v6M18 13.5v6M21.5 13.5v6' stroke='%23fff' stroke-width='1.6'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zalando+Sans:wght@200..700&family=Roboto+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="css/styles.css">
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 28 28" aria-hidden="true">
+      <rect x="1" y="1" width="26" height="26" rx="6"></rect>
+      <path class="frame" d="M6 9.5h16v10H6z"></path>
+      <path class="ribs" d="M9.5 12v5M13 12v5M16.5 12v5M20 12v5"></path>
+    </svg>
+    <span class="brand-name">Load Planner</span>
+    <span class="brand-sep" aria-hidden="true"></span>
+    <span class="brand-sub">Container &amp; trailer stuffing</span>
+  </div>
+  <div class="topbar-tools">
+    <div class="seg seg-top" role="group" aria-label="Length unit">
+      <button type="button" id="unit-in" data-unit-len="in">in</button>
+      <button type="button" id="unit-cm" data-unit-len="cm">cm</button>
+    </div>
+    <div class="seg seg-top" role="group" aria-label="Weight unit">
+      <button type="button" id="unit-lb" data-unit-wt="lb">lb</button>
+      <button type="button" id="unit-kg" data-unit-wt="kg">kg</button>
+    </div>
+    <button type="button" class="icon-btn" id="themeBtn" aria-label="Switch light or dark theme" title="Switch theme">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"></path></svg>
+    </button>
+  </div>
+</header>
+
+<div class="app">
+  <aside class="panel panel-input" aria-label="Load inputs">
+    <section class="block">
+      <div class="block-head">
+        <h2><span class="step-tag">1</span>Equipment</h2>
+        <button type="button" class="text-btn head-clear" id="capBtn">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="M13.5 6.5l4 4"></path></svg>
+          Edit CBM &amp; sizes
+        </button>
+      </div>
+      <div class="equip-grid" id="equipGrid" role="radiogroup" aria-label="Container or trailer"></div>
+    </section>
+
+    <section class="block block-cargo">
+      <div class="block-head">
+        <h2><span class="step-tag">2</span>Cargo</h2>
+        <span class="chip chip-sample" id="sampleChip" hidden>Example · TEMU7428660</span>
+        <button type="button" class="text-btn head-clear" id="clearBtn">Clear</button>
+      </div>
+      <div class="cargo-actions">
+        <button type="button" class="ghost-btn" id="importBtn">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M7 9l5-5 5 5M5 20h14"></path></svg>
+          Import CSV
+        </button>
+        <button type="button" class="ghost-btn" id="templateBtn" title="Download an empty CSV with the right columns">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"></path><path d="M14 3v4h4M9 13h6M9 17h6"></path></svg>
+          Template
+        </button>
+        <button type="button" class="ghost-btn" id="exportBtn" title="Download this cargo list as a CSV you can edit and import again">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"></path></svg>
+          Export
+        </button>
+      </div>
+      <div class="cargo-totals" id="cargoTotals"></div>
+      <div class="cargo-list" id="cargoList"></div>
+      <div class="add-row">
+        <button type="button" class="add-btn" id="addRow">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+          Add SKU
+        </button>
+        <button type="button" class="add-btn" id="addNest" title="Several SKUs packed together in one carton">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="13" rx="1.5"></rect><path d="M3 11h18M9 7V4h6v3"></path></svg>
+          Add nested carton
+        </button>
+      </div>
+    </section>
+
+    <section class="block block-options">
+      <div class="block-head"><h2><span class="step-tag">3</span>Load options</h2></div>
+      <label class="check"><input type="checkbox" id="optOrder"><span><b>Load SKUs in list order</b><small>Keeps each SKU together from the front wall to the doors. Can load slightly less.</small></span></label>
+      <label class="check"><input type="checkbox" id="optMulti"><span><b>Add containers when cargo overflows</b><small>Plans leftover cartons into more units of the same type.</small></span></label>
+    </section>
+
+    <div class="fill-bar">
+      <button type="button" class="btn-primary" id="fillBtn">
+        <span>Fill container</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+      </button>
+      <span class="fill-hint">Ctrl + Enter</span>
+    </div>
+  </aside>
+
+  <main class="panel stage" aria-label="3D load view">
+    <div class="stage-bar">
+      <div class="vp-badge" id="vpBadge"></div>
+      <div class="vp-tools">
+        <div class="seg" role="group" aria-label="Camera view">
+          <button type="button" data-view="iso" id="view-iso">3D</button>
+          <button type="button" data-view="top" id="view-top">Top</button>
+          <button type="button" data-view="side" id="view-side">Side</button>
+          <button type="button" data-view="door" id="view-door">Doors</button>
+        </div>
+        <button type="button" class="tool-btn" id="wallsBtn" aria-pressed="true" title="Show or hide walls">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"></path><path d="M3 7l9 4 9-4M12 11v10"></path></svg>
+          <span>Walls</span>
+        </button>
+        <button type="button" class="tool-btn" id="shotBtn" title="Save the view as a PNG image">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"></path><circle cx="12" cy="13" r="3.5"></circle></svg>
+          <span>PNG</span>
+        </button>
+      </div>
+    </div>
+    <div class="scene" id="scene">
+      <div class="vp-empty" id="vpEmpty" hidden>
+        <b>Empty container</b>
+        <span>Add carton sizes and quantities, then select Fill container.</span>
+      </div>
+      <div class="tooltip" id="tooltip" hidden></div>
+      <div class="vp-hint"><span class="hint-mouse">Drag to orbit · Scroll to zoom · Right-drag to pan</span><span class="hint-touch">Drag to orbit · Pinch to zoom · Tap a carton for details</span></div>
+    </div>
+    <div class="seq-bar" id="seqBar" hidden>
+      <button type="button" class="play" id="playBtn" aria-label="Play loading sequence">
+        <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
+        <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z"></path></svg>
+      </button>
+      <label class="seq-label" for="seqRange">Loading sequence</label>
+      <input type="range" id="seqRange" min="0" max="0" value="0">
+      <output id="seqOut" for="seqRange">0 / 0</output>
+    </div>
+  </main>
+
+  <aside class="panel panel-results" id="results" aria-label="Load results" aria-live="polite"></aside>
+</div>
+
+<dialog id="capDialog" class="dialog dialog-wide">
+  <form method="dialog" id="capForm">
+    <div class="dialog-head">
+      <h3>Container capacities</h3>
+      <button type="button" class="icon-btn plain" id="capClose" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </div>
+    <p><b>Rated CBM</b> is the practical full load used for every % figure. Inside sizes and payload drive the 3D plan. Changes apply straight away and are saved in this browser.</p>
+    <div class="table-wrap">
+      <table class="cap-table" id="capTable"></table>
+    </div>
+    <p class="hint">To change the defaults for everyone who uses the site, edit <code>js/containers.js</code> in the repository.</p>
+    <div class="dialog-row">
+      <button type="button" class="text-btn" id="capReset">Reset all to standard</button>
+      <div class="dialog-actions">
+        <button type="submit" class="btn-primary small"><span>Done</span></button>
+      </div>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="importDialog" class="dialog dialog-wide">
+  <form method="dialog" id="importForm">
+    <div class="dialog-head">
+      <h3>Import cargo</h3>
+      <button type="button" class="icon-btn plain" id="importClose" aria-label="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+      </button>
+    </div>
+    <p>Upload a CSV, or copy rows from Excel and paste them below. A header row is optional. Product master headers such as <code>Package Length</code>, <code>Package Depth</code> and <code>Package Weight (Lbs)</code> are recognised too.</p>
+    <div class="table-wrap">
+      <table class="cols-table">
+        <thead><tr><th>SKU</th><th>Units</th><th>Case Pack</th><th>Cartons</th><th>Length</th><th>Width</th><th>Height</th><th>Weight / ctn</th><th>Side Up</th><th>Stackable</th><th>Nest Group</th></tr></thead>
+        <tbody>
+          <tr><td>TB3896A</td><td>700</td><td>2</td><td></td><td>18</td><td>9</td><td>9.75</td><td>9.5</td><td>N</td><td>Y</td><td></td></tr>
+          <tr class="nest-row"><td>NAF2580L</td><td>718</td><td>1</td><td></td><td>13.5</td><td>10.75</td><td>25</td><td>20.64</td><td></td><td></td><td>NAF2580</td></tr>
+          <tr class="nest-row"><td>NAF2580S</td><td>718</td><td>1</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>NAF2580</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <details class="howto">
+      <summary>How to fill nested cartons</summary>
+      <ol>
+        <li>Give each nested carton a <b>Nest Group</b> code. Any text works; the SKU root is easiest, e.g. <code>NAF2580</code> for NAF2580L + NAF2580S.</li>
+        <li>Write one row per SKU inside the carton, all with the same code. Different cartons need different codes, even if their sizes match.</li>
+        <li><b>Case Pack</b> is how many units of that SKU go in one nested carton (A ×2, B ×1, C ×1 → 2, 1, 1).</li>
+        <li><b>Units</b> is the total of that SKU shipping. Cartons = Units ÷ Case Pack. Or skip Units and put the number of cartons in Cartons.</li>
+        <li>Carton size and weight are only needed on the first row of the group.</li>
+      </ol>
+    </details>
+    <ul class="rules">
+      <li><b>Cartons</b> = Units ÷ Case Pack, rounded up. Leave Units blank to give Cartons directly.</li>
+      <li><b>Side Up</b> Y keeps the carton upright. Blank or N lets it be laid on its side.</li>
+      <li id="importUnits"></li>
+    </ul>
+    <label class="drop" id="importDrop" for="importFile">
+      <input type="file" id="importFile" accept=".csv,.tsv,.txt,text/csv">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M7 9l5-5 5 5M5 20h14"></path></svg>
+      <span><b>Choose a CSV file</b> or drop it here</span>
+      <small id="importFileName"></small>
+    </label>
+    <textarea id="importText" rows="5" spellcheck="false" aria-label="CSV or pasted rows" placeholder="…or paste rows from Excel here"></textarea>
+    <div class="preview" id="importPreview" hidden></div>
+    <div class="dialog-row">
+      <label class="check inline"><input type="checkbox" id="importReplace" checked><span>Replace current cargo</span></label>
+      <div class="dialog-actions">
+        <button type="button" class="text-btn" id="importTemplate">Blank template</button>
+        <button type="button" class="text-btn" id="importExample">Example CSV</button>
+        <button type="button" class="ghost-btn" id="importCancel">Cancel</button>
+        <button type="submit" class="btn-primary small" id="importOk"><span>Import</span></button>
+      </div>
+    </div>
+    <p class="err" id="importErr" hidden></p>
+  </form>
+</dialog>
+
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
