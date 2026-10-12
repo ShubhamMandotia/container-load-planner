@@ -4,7 +4,7 @@ Plan how cartons fit into a **20' GP, 40' HQ, 45' HQ container or a 53' truckloa
 
 A container rated at 65 CBM can be "full" at 60 CBM or still have room at 66 CBM. It depends on the carton sizes. This tool places every carton, so you know before booking.
 
-**Live site:** `https://<github-user>.github.io/container-load-planner/` (update this link after the first publish)
+**Live site:** `https://shubhammandotia.github.io/container-load-planner/
 
 ---
 
