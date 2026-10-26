@@ -95,6 +95,9 @@
 
     <section class="block block-options">
       <div class="block-head"><h2><span class="step-tag">3</span>Load options</h2></div>
+      <label class="ref-field" for="optRef">Reference <span>printed on the PDF</span>
+        <input class="field" id="optRef" maxlength="80" placeholder="PO #, container # or note" autocomplete="off">
+      </label>
       <label class="check"><input type="checkbox" id="optOrder"><span><b>Load SKUs in list order</b><small>Keeps each SKU together from the front wall to the doors. Can load slightly less.</small></span></label>
       <label class="check"><input type="checkbox" id="optMulti"><span><b>Add containers when cargo overflows</b><small>Plans leftover cartons into more units of the same type.</small></span></label>
     </section>
@@ -122,9 +125,9 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"></path><path d="M3 7l9 4 9-4M12 11v10"></path></svg>
           <span>Walls</span>
         </button>
-        <button type="button" class="tool-btn" id="shotBtn" title="Save the view as a PNG image">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"></path><circle cx="12" cy="13" r="3.5"></circle></svg>
-          <span>PNG</span>
+        <button type="button" class="tool-btn" id="pdfBtn" title="Download the load plan as a PDF with every view">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"></path><path d="M14 3v4h4M12 11v6M9.5 14.5L12 17l2.5-2.5"></path></svg>
+          <span>PDF</span>
         </button>
       </div>
     </div>
@@ -185,7 +188,7 @@
       <table class="cols-table">
         <thead><tr><th>SKU</th><th>Units</th><th>Case Pack</th><th>Cartons</th><th>Length</th><th>Width</th><th>Height</th><th>Weight / ctn</th><th>Side Up</th><th>Stackable</th><th>Nest Group</th></tr></thead>
         <tbody>
-          <tr><td>TB3896A</td><td>700</td><td>2</td><td></td><td>18</td><td>9</td><td>9.75</td><td>9.5</td><td>N</td><td>Y</td><td></td></tr>
+          <tr><td>TB3896A</td><td>700</td><td>2</td><td></td><td>18</td><td>9</td><td>9.75</td><td>9.5</td><td>H</td><td>Y</td><td></td></tr>
           <tr class="nest-row"><td>NAF2580L</td><td>718</td><td>1</td><td></td><td>13.5</td><td>10.75</td><td>25</td><td>20.64</td><td></td><td></td><td>NAF2580</td></tr>
           <tr class="nest-row"><td>NAF2580S</td><td>718</td><td>1</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td>NAF2580</td></tr>
         </tbody>
@@ -203,7 +206,7 @@
     </details>
     <ul class="rules">
       <li><b>Cartons</b> = Units ÷ Case Pack, rounded up. Leave Units blank to give Cartons directly.</li>
-      <li><b>Side Up</b> Y keeps the carton upright. Blank or N lets it be laid on its side.</li>
+      <li><b>Side Up</b> says which side must stand vertical: <b>L</b>, <b>W</b> or <b>H</b> (Y also means H). Blank or N lets the carton go on any side.</li>
       <li id="importUnits"></li>
     </ul>
     <label class="drop" id="importDrop" for="importFile">

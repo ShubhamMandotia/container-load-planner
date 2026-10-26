@@ -73,7 +73,8 @@ function labelTexture(text, { size = 64, weight = 500 } = {}) {
   const font = `${weight} ${size}px "Zalando Sans", "Helvetica Neue", Arial, sans-serif`;
   const probe = document.createElement('canvas').getContext('2d');
   probe.font = font;
-  const w = Math.ceil(probe.measureText(text).width + size * 0.6);
+  // measureText ignores the 4px letter spacing used when drawing, so add it.
+  const w = Math.ceil(probe.measureText(text).width + text.length * 4 + size * 0.6);
   const h = Math.ceil(size * 1.4);
   const t = canvasTexture(w, h, (g) => {
     g.font = font;
@@ -84,6 +85,17 @@ function labelTexture(text, { size = 64, weight = 500 } = {}) {
   });
   return { tex: t, aspect: w / h };
 }
+
+// Light scene colours for PDF images, so prints look the same in either theme.
+const PRINT_PALETTE = {
+  '--scene-bg': '#f5f6f8',
+  '--scene-ground': '#eceff3',
+  '--scene-grid': '#d7dce3',
+  '--scene-steel': '#8892a1',
+  '--scene-edge': '#1a2030',
+  '--scene-label': '#4b5563',
+  '--scene-dim': '#dde1e6',
+};
 
 const easeInOut = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
 
@@ -188,23 +200,26 @@ export class Viewer {
     if (this.autoFit && this.dims) this.setView(this.view, false);
   }
 
-  applyTheme() {
-    const bg = new THREE.Color(token('--scene-bg', '#dfe5ea'));
+  // Colours come from the page's CSS tokens, or from `palette` (used to render
+  // print images in a light scheme whatever the page theme is).
+  applyTheme(palette = null) {
+    const t = (name, fallback) => (palette && palette[name]) || token(name, fallback);
+    const bg = new THREE.Color(t('--scene-bg', '#dfe5ea'));
     this.scene.background = bg;
     this.scene.fog = new THREE.Fog(bg, 45, 150);
-    this.groundMat.color.set(token('--scene-ground', '#d3dae0'));
+    this.groundMat.color.set(t('--scene-ground', '#d3dae0'));
     if (this.grid) this.scene.remove(this.grid);
-    const gc = token('--scene-grid', '#bcc6cf');
+    const gc = t('--scene-grid', '#bcc6cf');
     this.grid = new THREE.GridHelper(80, 80, gc, gc);
     this.grid.position.y = -0.03;
     this.grid.material.transparent = true;
     this.grid.material.opacity = 0.55;
     this.scene.add(this.grid);
-    const label = token('--scene-label', '#4b5965');
+    const label = t('--scene-label', '#4b5965');
     this.labels.forEach((m) => m.material.color.set(label));
-    if (this.wallMat) this.wallMat.color.set(token('--scene-steel', '#8f9ba6'));
-    if (this.lines) this.lines.material.color.set(token('--scene-edge', '#1d2833'));
-    this.dimColor = new THREE.Color(token('--scene-dim', '#c5ccd3'));
+    if (this.wallMat) this.wallMat.color.set(t('--scene-steel', '#8f9ba6'));
+    if (this.lines) this.lines.material.color.set(t('--scene-edge', '#1d2833'));
+    this.dimColor = new THREE.Color(t('--scene-dim', '#c5ccd3'));
     if (this.mesh) this.paint();
   }
 
@@ -262,6 +277,7 @@ export class Viewer {
     doorCorr.needsUpdate = true;
     doorCorr.repeat.set(W / 2 / 0.28, 1);
     doorMat.map = doorCorr;
+    const doors = (this.doors = new THREE.Group());
     for (const s of [-1, 1]) {
       const pivot = new THREE.Group();
       pivot.position.set(L / 2, 0, (s * W) / 2);
@@ -269,9 +285,9 @@ export class Viewer {
       leaf.position.set(0, H / 2, (-s * W) / 4);
       pivot.add(leaf);
       pivot.rotation.y = s * -1.95;
-      walls.add(pivot);
+      doors.add(pivot);
     }
-    this.shell.add(walls);
+    this.shell.add(walls, doors);
 
     // Steel frame along the edges.
     const frameMat = new THREE.MeshStandardMaterial({ color: '#3a4651', roughness: 0.55, metalness: 0.45 });
@@ -327,7 +343,9 @@ export class Viewer {
   }
 
   setWallsVisible(v) {
+    this.wallsOn = v;
     if (this.walls) this.walls.visible = v;
+    if (this.doors) this.doors.visible = v;
   }
 
   // ---------------------------------------------------------------- cargo
@@ -493,9 +511,65 @@ export class Viewer {
     };
   }
 
-  snapshot() {
-    this.renderer.render(this.scene, this.camera);
-    return this.renderer.domElement.toDataURL('image/png');
+  // Renders each named view (iso, top, side, door) off-screen at its own size
+  // and returns JPEG data URLs, then puts the live view back as it was.
+  // Each shot is { view, width, height, fov?, walls?, labels? }. A narrow fov
+  // gives a near-flat, plan-like projection; walls: false hides walls and
+  // doors; labels: false hides the ground labels.
+  captureViews(shots, palette = PRINT_PALETTE) {
+    const r = this.renderer;
+    const cam = this.camera;
+    const prev = {
+      ratio: r.getPixelRatio(),
+      pos: cam.position.clone(),
+      target: this.controls.target.clone(),
+      view: this.view,
+      autoFit: this.autoFit,
+      filter: this.filter,
+      hovered: this.hovered,
+      count: this.mesh ? this.mesh.count : 0,
+      fov: cam.fov,
+    };
+    const wallsOn = this.wallsOn !== false;
+    this.tween = null;
+    this.filter = null;
+    this.hovered = -1;
+    this.applyTheme(palette);
+    if (this.mesh) this.setVisibleCount(this.boxes.length);
+    r.setPixelRatio(1);
+
+    const out = {};
+    for (const { view, width, height, fov, walls = true, labels = true } of shots) {
+      this.labels.forEach((m) => (m.visible = labels));
+      r.setSize(width, height, false);
+      cam.aspect = width / height;
+      cam.fov = fov || prev.fov;
+      cam.updateProjectionMatrix();
+      const show = walls && wallsOn;
+      if (this.walls) this.walls.visible = show;
+      if (this.doors) this.doors.visible = show;
+      this.setView(view, false);
+      r.render(this.scene, cam);
+      out[view] = r.domElement.toDataURL('image/jpeg', 0.9);
+    }
+
+    r.setPixelRatio(prev.ratio);
+    cam.fov = prev.fov;
+    this.setWallsVisible(wallsOn);
+    this.labels.forEach((m) => (m.visible = true));
+    this.view = prev.view;
+    this.autoFit = prev.autoFit;
+    this.filter = prev.filter;
+    this.hovered = prev.hovered;
+    this.resize();
+    if (!prev.autoFit) {
+      cam.position.copy(prev.pos);
+      this.controls.target.copy(prev.target);
+      this.controls.update();
+    }
+    if (this.mesh) this.setVisibleCount(prev.count);
+    this.applyTheme();
+    return out;
   }
 
   tick(now) {

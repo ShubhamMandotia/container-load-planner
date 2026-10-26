@@ -4,7 +4,7 @@ Plan how cartons fit into a **20' GP, 40' HQ, 45' HQ container or a 53' truckloa
 
 A container rated at 65 CBM can be "full" at 60 CBM or still have room at 66 CBM. It depends on the carton sizes. This tool places every carton, so you know before booking.
 
-**Live site:** `https://shubhammandotia.github.io/container-load-planner/
+**Live site:** `https://<github-user>.github.io/container-load-planner/` (update this link after the first publish)
 
 ---
 
@@ -15,14 +15,21 @@ A container rated at 65 CBM can be "full" at 60 CBM or still have room at 66 CBM
    - **Add SKU:** enter Units and Case Pack, and Cartons is calculated (Units ÷ Case Pack, rounded up). Or leave Units blank and type Cartons.
    - **Add nested carton:** several SKUs packed in one carton. Add each SKU with its units per carton (e.g. A ×2, B ×1, C ×1), then the number of cartons and the final carton size.
    - Enter the master carton **L × W × H** (inches by default; switch to cm at the top right) and, optionally, the weight per carton (lb by default).
-   - **This side up** is off by default, so cartons may be laid on their side, which is how most of our containers are stuffed. Turn it on for cartons that must stay upright. **Stackable:** other cartons may go on top.
+   - **Up** picks which side of the carton must stand vertical: **L**, **W** or **H** (the chosen dimension is marked ↑ up). **Any**, the default, lets the carton go on any side, which is how most of our containers are stuffed. A carton with a fixed up side can still turn 90° on the floor. **Stackable:** other cartons may go on top.
 3. Press **Fill container** (or Ctrl + Enter).
 4. Read the result:
    - % of rated CBM, cartons loaded, weight against payload, and floor length used.
    - What didn't fit, with an option to plan the rest into more containers.
    - **Stacking plan:** numbered steps from the front wall to the doors. Select a step or a SKU to highlight it in 3D.
    - **Loading sequence** slider and play button.
-   - Exports: **PNG** of the 3D view, **stacking plan CSV**, and **Copy summary** for emails.
+   - Exports: **PDF** load plan, **stacking plan CSV**, and **Copy summary** for emails.
+5. **PDF:** select **PDF** in the 3D toolbar or **Download PDF** under the results. It includes:
+   - a summary page with the figures and a large 3D view
+   - top, side and door views with a colour key
+   - the cargo table and the step-by-step stacking plan
+   - one set of pages per container when cargo spills into more than one unit
+
+   Type a **Reference** (PO #, container # or note) under Load options to print it on every page.
 
 Your cargo list and settings are saved in your own browser. Nothing is uploaded anywhere.
 
@@ -40,7 +47,7 @@ Use **Blank template** to download an empty CSV with the right columns. Fill it 
 | Cartons | Leave blank to calculate from Units ÷ Case Pack |
 | Length, Width, Height | Carton size. The header says the unit, e.g. `Length (in)` or `Length (cm)` |
 | Weight per Carton | Optional. `(kg)` or `(lb)` in the header |
-| This Side Up (Y/N) | Default N (carton may be laid on its side) |
+| This Side Up (L/W/H/N) | Which side stands vertical: `L`, `W` or `H` (`Y` also means H). Blank or `N` = any side |
 | Stackable (Y/N) | Default Y |
 | Nest Group | Rows with the same value are packed together in one carton |
 
@@ -61,7 +68,7 @@ For each row of a nested carton:
 Example: 80 cartons that each hold SKU-A ×2, SKU-B ×1 and SKU-C ×1 in a 24 × 24 × 19 in carton:
 
 ```
-SKU,Units,Case Pack,Cartons,Length (in),Width (in),Height (in),Weight per Carton (lb),This Side Up (Y/N),Stackable (Y/N),Nest Group
+SKU,Units,Case Pack,Cartons,Length (in),Width (in),Height (in),Weight per Carton (lb),This Side Up (L/W/H/N),Stackable (Y/N),Nest Group
 SKU-A,160,2,,24,24,19,24,N,Y,SET-01
 SKU-B,80,1,,,,,,,,SET-01
 SKU-C,80,1,,,,,,,,SET-01
@@ -122,3 +129,4 @@ It was checked against 119 real 40' HC containers from the shipment tracker, usi
 | `js/viewer.js` | 3D view (Three.js) |
 | `js/containers.js` | Equipment sizes, payloads and rated CBM |
 | `js/csv.js` | CSV reading and writing |
+| `js/report.js` | PDF load plan (jsPDF, loaded from cdnjs on first export) |

@@ -2,6 +2,7 @@ import { EQUIPMENT, byId } from './containers.js';
 import { planShipment } from './packer.js';
 import { Viewer } from './viewer.js';
 import { parseTable, toCsv } from './csv.js';
+import { buildPdf } from './report.js';
 
 // ------------------------------------------------------------------ state
 const STORE_KEY = 'container-load-planner:v3';
@@ -47,8 +48,10 @@ function normItem(x, color) {
     w: x.w || 0,
     h: x.h || 0,
     weight: x.weight || 0,
-    // Most cartons may be laid on their side; "This side up" is opt-in.
-    upright: x.upright === true,
+    // Which carton dimension must stand vertical: 'l', 'w', 'h', or '' for
+    // any side. Most cartons may be laid on their side, so '' is the default.
+    // Older saved data used `upright: true`, which means H up.
+    up: ['l', 'w', 'h'].includes(x.up) ? x.up : x.upright === true ? 'h' : '',
     stackable: x.stackable !== false,
     color: x.color || color,
   };
@@ -283,10 +286,28 @@ const ICON_UP = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6
 const ICON_STACK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 13l9 5 9-5"></path></svg>';
 const ICON_X = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>';
 
+const UP_TITLES = {
+  '': 'Any side can face up. Cartons may be laid on their side.',
+  l: 'Length stands vertical: the L edge is the carton height.',
+  w: 'Width stands vertical: the W edge is the carton height.',
+  h: 'Height stands vertical: the carton stays as packed.',
+};
+function upPicker(it) {
+  return `<div class="up-pick" role="radiogroup" aria-label="Which side is up for ${esc(labelOf(it))}">
+    <span class="up-label">${ICON_UP}Up</span>
+    ${['', 'l', 'w', 'h']
+      .map((v) => {
+        const id = `f-${it.id}-up-${v || 'any'}`;
+        return `<label class="up-opt" for="${id}" title="${UP_TITLES[v]}"><input type="radio" id="${id}" name="up-${it.id}" data-k="up" value="${v}" ${it.up === v ? 'checked' : ''}><span>${v ? v.toUpperCase() : 'Any'}</span></label>`;
+      })
+      .join('')}
+  </div>`;
+}
+
 function cargoCard(it) {
   const f = (k) => `f-${it.id}-${k}`;
   const num = (k, val, label, mode = 'decimal', extra = '') =>
-    `<label for="${f(k)}">${label}<input class="field num" id="${f(k)}" data-k="${k}" inputmode="${mode}" value="${val}" autocomplete="off" ${extra}></label>`;
+    `<label for="${f(k)}" data-dim="${k}"${k === it.up ? ' class="is-up"' : ''}><span class="lbl">${label}</span><input class="field num" id="${f(k)}" data-k="${k}" inputmode="${mode}" value="${val}" autocomplete="off" ${extra}></label>`;
   const swatch = `<label class="swatch" style="background:${it.color}" title="Change colour"><input type="color" id="${f('color')}" data-k="color" value="${it.color}" aria-label="Colour for ${esc(labelOf(it))}"></label>`;
   const del = `<button type="button" class="del" data-del aria-label="Remove ${esc(labelOf(it))}">${ICON_X}</button>`;
   const dims = `<div class="dims">
@@ -296,7 +317,7 @@ function cargoCard(it) {
       ${num('weight', it.weight ? wtOut(it.weight) : '', `Wt/ctn (${state.unitWt})`)}
     </div>`;
   const foot = `<div class="sku-foot">
-      <label class="toggle" title="Carton stays upright; it can still turn 90° on the floor"><input type="checkbox" id="${f('upright')}" data-k="upright" ${it.upright ? 'checked' : ''}>${ICON_UP}This side up</label>
+      ${upPicker(it)}
       <label class="toggle" title="Other cartons can be stacked on top"><input type="checkbox" id="${f('stackable')}" data-k="stackable" ${it.stackable ? 'checked' : ''}>${ICON_STACK}Stackable</label>
       <span class="sku-cbm" data-cbm></span>
     </div>
@@ -423,7 +444,11 @@ function onCargoInput(e) {
       it.color = inp.value;
       row.querySelector('.swatch').style.background = inp.value;
       row.style.setProperty('--sku-color', inp.value);
-    } else if (k === 'upright' || k === 'stackable') it[k] = inp.checked;
+    } else if (k === 'stackable') it[k] = inp.checked;
+    else if (k === 'up') {
+      it.up = inp.value;
+      row.querySelectorAll('[data-dim]').forEach((el) => el.classList.toggle('is-up', el.dataset.dim === it.up));
+    }
     else if (k === 'units' || k === 'casePack' || k === 'cartons') {
       if (inp.readOnly) return;
       it[k] = posInt(inp.value);
@@ -515,7 +540,7 @@ function highlightInvalid() {
 const HEADERS = () => [
   'SKU', 'Units', 'Case Pack', 'Cartons',
   `Length (${state.unitLen})`, `Width (${state.unitLen})`, `Height (${state.unitLen})`,
-  `Weight per Carton (${state.unitWt})`, 'This Side Up (Y/N)', 'Stackable (Y/N)', 'Nest Group',
+  `Weight per Carton (${state.unitWt})`, 'This Side Up (L/W/H/N)', 'Stackable (Y/N)', 'Nest Group',
 ];
 
 function columnFor(h) {
@@ -523,7 +548,7 @@ function columnFor(h) {
   if (/cbm|upc|gtin|hts|\bhs\b|fob|price|cost|duty|tariff|freight|container q|name|type|date|code/.test(s)) return null;
   if (/nest/.test(s)) return 'nest';
   if (/weight|\bwt\b|gross/.test(s)) return 'weight';
-  if (/side up|upright|orient/.test(s)) return 'upright';
+  if (/side up|up side|upright|orient/.test(s)) return 'up';
   if (/stack/.test(s)) return 'stackable';
   if (/length|^l\b|^l \(/.test(s)) return 'l';
   if (/width|^w\b|^w \(/.test(s)) return 'w';
@@ -553,7 +578,17 @@ function mapHeaders(first) {
   });
   return cols.map((k, j) => (k && best[k] === j ? k : null));
 }
-const DEFAULT_ORDER = ['sku', 'units', 'casePack', 'cartons', 'l', 'w', 'h', 'weight', 'upright', 'stackable', 'nest'];
+const DEFAULT_ORDER = ['sku', 'units', 'casePack', 'cartons', 'l', 'w', 'h', 'weight', 'up', 'stackable', 'nest'];
+
+// "This Side Up" column: L, W or H names the side that stands vertical;
+// Y means H (the usual "this way up"); N or blank means any side.
+function upOf(v) {
+  const s = String(v ?? '').trim().toLowerCase();
+  if (/^(l|len|length)$/.test(s)) return 'l';
+  if (/^(w|wid|width)$/.test(s)) return 'w';
+  if (/^(h|ht|height|y|yes|true|1|x)$/.test(s)) return 'h';
+  return '';
+}
 
 function yesNo(v, dflt) {
   const s = String(v ?? '').trim().toLowerCase();
@@ -603,7 +638,7 @@ function importRows(rows) {
       w: num(r.w) * CM_PER[lenUnit],
       h: num(r.h) * CM_PER[lenUnit],
       weight: num(r.weight) * KG_PER[wtUnit],
-      upright: yesNo(r.upright, false),
+      up: upOf(r.up),
       stackable: yesNo(r.stackable, true),
     });
   }
@@ -638,7 +673,7 @@ function importRows(rows) {
       const it = {
         kind: 'nest', name: x.nest, cartons,
         l: pick('l'), w: pick('w'), h: pick('h'), weight: pick('weight'),
-        upright: g[0].upright, stackable: g[0].stackable,
+        up: g[0].up, stackable: g[0].stackable,
         contents: g.map((r) => ({ sku: r.sku, pack: r.casePack || 1 })),
       };
       if (!(it.l && it.w && it.h)) {
@@ -663,7 +698,7 @@ function cargoRows(list = state.items) {
   const L = (cm) => (cm ? lenOut(cm) : '');
   const yn = (b) => (b ? 'Y' : 'N');
   list.forEach((it, k) => {
-    const common = [L(it.l), L(it.w), L(it.h), it.weight ? wtOut(it.weight) : '', yn(it.upright), yn(it.stackable)];
+    const common = [L(it.l), L(it.w), L(it.h), it.weight ? wtOut(it.weight) : '', it.up ? it.up.toUpperCase() : 'N', yn(it.stackable)];
     if (it.kind === 'single') {
       rows.push([it.sku, it.units || '', it.casePack || '', isComputed(it) ? cartonsOf(it) : it.cartons || '', ...common, '']);
     } else {
@@ -711,6 +746,16 @@ function exampleCsv() {
 }
 
 // ------------------------------------------------------------------- plan
+// Carton size in whole mm, turned so the side the user marked as "up" is the
+// packer's height. With no up side the packer may use any orientation.
+function packDims(it) {
+  const mm = (cm) => Math.ceil(cm * 10 - 1e-6);
+  const [l, w, h] = [mm(it.l), mm(it.w), mm(it.h)];
+  if (it.up === 'l') return { l: w, w: h, h: l };
+  if (it.up === 'w') return { l, w: h, h: w };
+  return { l, w, h };
+}
+
 function runPlan({ quiet = false } = {}) {
   const s = spec();
   const valid = state.items.filter(validItem);
@@ -729,9 +774,9 @@ function runPlan({ quiet = false } = {}) {
     contents: it.contents.map((c) => ({ ...c })),
     label: labelOf(it),
     qty: cartonsOf(it),
-    mm: { l: Math.ceil(it.l * 10 - 1e-6), w: Math.ceil(it.w * 10 - 1e-6), h: Math.ceil(it.h * 10 - 1e-6) },
+    mm: packDims(it),
   }));
-  const packItems = items.map((it) => ({ l: it.mm.l, w: it.mm.w, h: it.mm.h, qty: it.qty, weight: it.weight || 0, upright: it.upright, stackable: it.stackable }));
+  const packItems = items.map((it) => ({ l: it.mm.l, w: it.mm.w, h: it.mm.h, qty: it.qty, weight: it.weight || 0, upright: !!it.up, stackable: it.stackable }));
   const result = planShipment({ L: s.L, W: s.W, H: s.H, payload: s.payload }, packItems, { keepOrder: state.keepOrder, multi: state.multi });
   plan = { spec: s, items, result, multi: state.multi };
   active = 0;
@@ -823,7 +868,9 @@ function stopSequence() {
 }
 
 function orientNote(it, b) {
-  if (b.h === it.mm.h) return b.l === it.mm.l ? 'As packed' : 'Turned 90°';
+  const turned = b.l !== it.mm.l;
+  if (it.up) return `${it.up.toUpperCase()} side up${turned ? ', turned 90°' : ''}`;
+  if (b.h === it.mm.h) return turned ? 'Turned 90°' : 'As entered';
   return 'On its side';
 }
 
@@ -957,7 +1004,9 @@ function renderResults() {
       const sel = filter && filter.block === bl.id;
       const [l, , h] = bl.dims;
       const pos = bl.z0 === 0 ? 'on the floor' : `on top, from ${metres(bl.z0)} up`;
-      const turn = h === it.mm.h ? (l === it.mm.l ? '' : ', turned 90°') : ', on its side';
+      const turn = it.up
+        ? `, ${it.up.toUpperCase()} side up${l === it.mm.l ? '' : ', turned 90°'}`
+        : h === it.mm.h ? (l === it.mm.l ? '' : ', turned 90°') : ', on its side';
       return `<li><button type="button" class="step${sel ? ' sel' : ''}" data-block="${bl.id}" id="step-${bl.id}">
         <span class="step-n" style="background:${it.color}">${bl.step}</span>
         <span class="step-body">
@@ -972,6 +1021,7 @@ function renderResults() {
 
   html += `<div class="res-section"><div class="res-actions">
     <button type="button" class="ghost-btn" id="copyBtn"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"></rect><path d="M16 8V5a1 1 0 0 0-1-1H5a1 1 0 0 0-1 1v10a1 1 0 0 0 1 1h3"></path></svg>Copy summary</button>
+    <button type="button" class="ghost-btn" id="pdfBtn2"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"></path><path d="M14 3v4h4M12 11v6M9.5 14.5L12 17l2.5-2.5"></path></svg><span>Download PDF</span></button>
     <button type="button" class="ghost-btn" id="csvBtn"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"></path></svg>Stacking plan CSV</button>
   </div></div>`;
 
@@ -1050,11 +1100,182 @@ function planCsv() {
   return toCsv(rows);
 }
 
+// -------------------------------------------------------------------- PDF
+function verdictPlain() {
+  const { spec: s, items, result } = plan;
+  const loads = result.loads;
+  const totalQty = items.reduce((a, it) => a + it.qty, 0);
+  const unplacedQty = result.unplaced.reduce((a, q) => a + q, 0);
+  const unplacedCbm = result.unplaced.reduce((a, q, i) => a + q * itemCbm(items[i]), 0);
+  const never = items.filter((_, i) => result.neverFits[i]);
+  if (never.length) return { tone: 'bad', text: `${never.map((it) => it.label).join(', ')} can't fit in a ${s.name} in any allowed position (too large or too heavy).` };
+  if (unplacedQty) return { tone: 'bad', text: `${fmt(unplacedQty)} cartons (${unplacedCbm.toFixed(2)} CBM) don't fit. They are listed under Not loaded at the end.` };
+  if (loads.length > 1) return { tone: 'warn', text: `Needs ${loads.length} × ${s.name}. All ${fmt(totalQty)} cartons are planned.` };
+  const cbm = loads[0].loadedVolume / 1e9;
+  const freeFloor = s.L - loads[0].usedLength;
+  const floor = freeFloor > 50 ? ` ${metres(freeFloor)} of clear floor is left at the doors.` : '';
+  if (cbm > s.rated) return { tone: 'good', text: `All ${fmt(totalQty)} cartons fit, ${(cbm - s.rated).toFixed(1)} CBM above the ${fmt(s.rated)} CBM rating. Load by this plan; there's little slack for loose stacking.${floor}` };
+  return { tone: 'good', text: `All ${fmt(totalQty)} cartons fit. ${(s.rated - cbm).toFixed(1)} CBM left before the ${fmt(s.rated)} CBM rating.${floor}` };
+}
+
+// Image sizes match the PDF slots: a wide 3D view, long top and side views,
+// and a near-square door view.
+// Top, side and door use a narrow lens so they read like flat drawings; top
+// and side also drop the walls and doors so nothing covers the cargo.
+const SHOTS = [
+  { view: 'iso', width: 1800, height: 874 },
+  { view: 'top', width: 2000, height: 400, fov: 10, walls: false },
+  { view: 'side', width: 2000, height: 400, fov: 10, walls: false, labels: false },
+  { view: 'door', width: 920, height: 800, fov: 14 },
+];
+
+function buildReport() {
+  const { spec: s, items, result } = plan;
+  const loads = result.loads;
+  const inside = insideCbm(s);
+  const totalQty = items.reduce((a, it) => a + it.qty, 0);
+  const u = state.unitLen;
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const upText = (it) => (it.up ? `${it.up.toUpperCase()} up` : 'Any');
+
+  const units = loads.map((load, i) => {
+    viewer.setLoad(load, items);
+    const images = viewer.captureViews(SHOTS);
+    images.isoAspect = 1800 / 874;
+    images.longAspect = 2000 / 400;
+    images.doorAspect = 920 / 800;
+
+    const cbm = load.loadedVolume / 1e9;
+    const kg = load.boxes.reduce((a, b) => a + (items[b.item].weight || 0), 0);
+    const stackTop = load.boxes.reduce((m, b) => Math.max(m, b.z + b.h), 0);
+    const label = loads.length > 1 ? `${s.name} · Unit ${i + 1} of ${loads.length}` : s.name;
+    const inUnit = items.map((it, k) => ({ it, k, n: load.loaded[k] })).filter((x) => x.n > 0);
+
+    return {
+      heading: label,
+      label,
+      images,
+      verdict: verdictPlain(),
+      kpis: [
+        { label: 'Rated capacity used', value: `${fmt((cbm / s.rated) * 100, 1)}%`, sub: `of ${fmt(s.rated)} CBM rated` },
+        { label: 'CBM loaded', value: cbm.toFixed(2), sub: `${fmt((cbm / inside) * 100)}% of ${fmt(inside, 1)} CBM inside` },
+        { label: 'Cartons', value: fmt(load.boxes.length), sub: `of ${fmt(totalQty)} planned` },
+        { label: 'Weight', value: kg ? wtFmt(kg) : '-', sub: kg ? `of ${wtFmt(s.payload)} payload` : 'No weights entered' },
+        { label: 'Floor used', value: metres(load.usedLength), sub: `of ${metres(s.L)}` },
+        { label: 'Highest stack', value: metres(stackTop), sub: `of ${metres(s.H)}` },
+      ],
+      legend: inUnit.map(({ it, n }) => ({
+        color: it.color,
+        label: it.label.length > 26 ? `${it.label.slice(0, 25)}...` : it.label,
+        detail: `${fmt(n)} ctns · ${upText(it)}`,
+      })),
+      cargo: {
+        title: 'Cargo in this unit',
+        head: ['SKU / carton', 'Inside carton', 'Up side', `Carton L × W × H (${u})`, 'Loaded', 'Of', 'CBM', 'Units loaded'],
+        right: [4, 5, 6],
+        colors: inUnit.map(({ it }) => it.color),
+        rows: inUnit.map(({ it, n }) => {
+          const units = unitsIn(it, n);
+          return [
+            it.label,
+            it.kind === 'nest' ? contentsText(it) : it.casePack ? `${it.casePack} per ctn` : '-',
+            upText(it),
+            `${lenOut(it.l)} × ${lenOut(it.w)} × ${lenOut(it.h)}`,
+            fmt(n),
+            fmt(it.qty),
+            (n * itemCbm(it)).toFixed(2),
+            units.length ? (it.kind === 'nest' ? units.map((x) => `${x.sku} ${fmt(x.units)}`).join(', ') : fmt(units[0].units)) : '-',
+          ];
+        }),
+      },
+      steps: {
+        title: 'Stacking plan (load from the front wall towards the doors)',
+        compact: true,
+        head: ['Step', 'SKU / carton', 'Cartons', 'Across × high × deep', 'Placed', 'From front', 'To', 'Bottom at'],
+        right: [2, 5, 6, 7],
+        colors: null,
+        rows: load.blocks
+          .slice()
+          .sort((a, b) => a.step - b.step)
+          .map((bl) => {
+            const it = items[bl.item];
+            return [
+              String(bl.step),
+              it.label,
+              fmt(bl.n),
+              `${bl.ny} × ${bl.nz} × ${bl.nx}`,
+              orientNote(it, { l: bl.dims[0], h: bl.dims[2] }),
+              metres(bl.x0),
+              metres(bl.x1),
+              bl.z0 === 0 ? 'Floor' : metres(bl.z0),
+            ];
+          }),
+      },
+    };
+  });
+  showLoad();
+
+  const left = items.map((it, k) => ({ it, q: result.unplaced[k] })).filter((x) => x.q > 0);
+  const refSlug = state.ref ? `-${state.ref.replace(/[^\w-]+/g, '_').slice(0, 30)}` : '';
+  return {
+    filename: `load-plan-${s.id}${refSlug}-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.pdf`,
+    date: now.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }),
+    reference: state.ref || '',
+    subtitle: `${s.name} (${s.iso}) · inside ${dimsLabel(s.L, s.W, s.H)} · ${fmt(inside, 1)} CBM inside · rated ${fmt(s.rated)} CBM · payload ${wtFmt(s.payload)}`,
+    footer: `Load Planner · ${s.name}${state.ref ? ` · ${state.ref}` : ''}`,
+    units,
+    notLoaded: left.length
+      ? {
+          title: 'Not loaded',
+          head: ['SKU / carton', 'Cartons not loaded', 'CBM'],
+          right: [1, 2],
+          colors: left.map(({ it }) => it.color),
+          rows: left.map(({ it, q }) => [it.label, fmt(q), (q * itemCbm(it)).toFixed(2)]),
+        }
+      : null,
+  };
+}
+
+let pdfBusy = false;
+async function exportPdf() {
+  if (pdfBusy) return;
+  if (!plan || !plan.result.loads.length) return toast('Fill the container first, then download the PDF.');
+  pdfBusy = true;
+  const buttons = [$('#pdfBtn'), $('#pdfBtn2')].filter(Boolean);
+  buttons.forEach((b) => {
+    b.disabled = true;
+    const span = b.querySelector('span');
+    if (span) {
+      b.dataset.label = span.textContent;
+      span.textContent = 'Preparing…';
+    }
+  });
+  stopSequence();
+  try {
+    // Let the button state paint before the heavy rendering starts.
+    await new Promise((r) => setTimeout(r, 30));
+    await buildPdf(buildReport());
+    toast('PDF downloaded');
+  } catch (err) {
+    console.error(err);
+    toast("Couldn't create the PDF. Check your internet connection; the PDF tool loads from the web.", 5000);
+  } finally {
+    pdfBusy = false;
+    [$('#pdfBtn'), $('#pdfBtn2')].filter(Boolean).forEach((b) => {
+      b.disabled = false;
+      const span = b.querySelector('span');
+      if (span && b.dataset.label) span.textContent = b.dataset.label;
+    });
+  }
+}
+
 // ----------------------------------------------------------------- events
 function syncToggles() {
   document.querySelectorAll('[data-unit-len]').forEach((b) => b.classList.toggle('on', b.dataset.unitLen === state.unitLen));
   document.querySelectorAll('[data-unit-wt]').forEach((b) => b.classList.toggle('on', b.dataset.unitWt === state.unitWt));
   $('#optOrder').checked = state.keepOrder;
+  $('#optRef').value = state.ref || '';
   $('#optMulti').checked = state.multi;
 }
 
@@ -1204,6 +1425,10 @@ function bind() {
   $('#templateBtn').addEventListener('click', template);
   $('#importTemplate').addEventListener('click', template);
 
+  $('#optRef').addEventListener('input', (e) => {
+    state.ref = e.target.value.trim();
+    save();
+  });
   $('#optOrder').addEventListener('change', (e) => {
     state.keepOrder = e.target.checked;
     save();
@@ -1236,11 +1461,7 @@ function bind() {
     btn.setAttribute('aria-pressed', on);
     viewer.setWallsVisible(on);
   });
-  $('#shotBtn').addEventListener('click', () => {
-    fetch(viewer.snapshot())
-      .then((r) => r.blob())
-      .then((blob) => download(`load-plan-${(plan?.spec || spec()).id}.png`, blob));
-  });
+  $('#pdfBtn').addEventListener('click', exportPdf);
   $('#seqRange').addEventListener('input', (e) => {
     stopSequence();
     viewer.setVisibleCount(+e.target.value);
@@ -1282,6 +1503,7 @@ function bind() {
       );
       return;
     }
+    if (e.target.closest('#pdfBtn2')) return exportPdf();
     if (e.target.closest('#csvBtn')) {
       download(`stacking-plan-${plan.spec.id}.csv`, new Blob(['﻿' + planCsv()], { type: 'text/csv' }));
     }

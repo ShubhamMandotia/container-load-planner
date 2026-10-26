@@ -105,14 +105,41 @@ function run(C, items, strategy) {
   // Loading order: front wall to doors, floor up, left to right.
   boxes.sort((a, b) => a.x - b.x || a.z - b.z || a.y - b.y);
   boxes.forEach((b, k) => (b.seq = k));
-  blocks.sort((a, b) => a.x0 - b.x0 || a.z0 - b.z0 || a.y0 - b.y0);
-  blocks.forEach((b, k) => (b.step = k + 1));
+  const steps = mergeBlocks(blocks, boxes);
+  steps.forEach((b, k) => (b.step = k + 1));
 
   const loaded = items.map((it, i) => (Math.max(0, it.qty | 0)) - rem[i]);
   let usedLength = 0;
   for (const b of boxes) usedLength = Math.max(usedLength, b.x + b.l);
 
-  return { strategy, boxes, blocks, loaded, remaining: rem, loadedVolume: volume, weight, usedLength };
+  return { strategy, boxes, blocks: steps, loaded, remaining: rem, loadedVolume: volume, weight, usedLength };
+}
+
+// Joins identical blocks laid back to back (same carton, pattern, and
+// position across and up) into one step, so the plan reads as whole walls
+// instead of one-carton-deep slices. Boxes are re-pointed at the merged step.
+function mergeBlocks(blocks, boxes) {
+  const sorted = blocks.slice().sort((a, b) => a.x0 - b.x0 || a.z0 - b.z0 || a.y0 - b.y0);
+  const open = new Map();
+  const out = [];
+  const remap = new Map();
+  for (const b of sorted) {
+    const key = [b.item, ...b.dims, b.ny, b.nz, b.y0, b.z0].join(',');
+    const g = open.get(key);
+    if (g && g.x1 === b.x0) {
+      g.nx += b.nx;
+      g.n += b.n;
+      g.x1 = b.x1;
+      remap.set(b.id, g.id);
+    } else {
+      const c = { ...b };
+      open.set(key, c);
+      out.push(c);
+      remap.set(b.id, c.id);
+    }
+  }
+  for (const bx of boxes) bx.block = remap.get(bx.block);
+  return out;
 }
 
 function pickSpace(spaces) {
