@@ -42,6 +42,18 @@ export const EQUIPMENT = [
     payload: 20412,
     rated: 98,
   },
+  {
+    // Standard US (GMA) pallet: 48 × 40 in deck. H is the most the cartons
+    // may stack on top of the deck (72 in). Payload 2,500 lb.
+    id: 'PLT',
+    name: 'Pallet 48×40',
+    kind: 'Pallet',
+    iso: 'GMA',
+    pallet: true,
+    L: 1219, W: 1016, H: 1828,
+    payload: 1134,
+    rated: 2.27,
+  },
 ];
 
 export const byId = (id) => EQUIPMENT.find((e) => e.id === id) || EQUIPMENT[1];

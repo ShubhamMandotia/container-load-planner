@@ -143,8 +143,9 @@ export class Viewer {
     this.scene.add(this.hemi, this.sun, this.sun.target, fill);
 
     this.groundMat = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
-    const ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400).rotateX(-Math.PI / 2), this.groundMat);
-    ground.position.y = -0.031;
+    const ground = (this.ground = new THREE.Mesh(new THREE.PlaneGeometry(400, 400).rotateX(-Math.PI / 2), this.groundMat));
+    this.groundY = -0.031;
+    ground.position.y = this.groundY;
     ground.receiveShadow = true;
     this.scene.add(ground);
 
@@ -211,13 +212,14 @@ export class Viewer {
     if (this.grid) this.scene.remove(this.grid);
     const gc = t('--scene-grid', '#bcc6cf');
     this.grid = new THREE.GridHelper(80, 80, gc, gc);
-    this.grid.position.y = -0.03;
+    this.grid.position.y = this.groundY + 0.001;
     this.grid.material.transparent = true;
     this.grid.material.opacity = 0.55;
     this.scene.add(this.grid);
     const label = t('--scene-label', '#4b5965');
     this.labels.forEach((m) => m.material.color.set(label));
     if (this.wallMat) this.wallMat.color.set(t('--scene-steel', '#8f9ba6'));
+    if (this.envMat) this.envMat.color.set(t('--scene-edge', '#1d2833'));
     if (this.lines) this.lines.material.color.set(t('--scene-edge', '#1d2833'));
     this.dimColor = new THREE.Color(t('--scene-dim', '#c5ccd3'));
     if (this.mesh) this.paint();
@@ -227,9 +229,16 @@ export class Viewer {
   // fmtLen(mm) formats the ground labels in the user's length unit.
   setContainer(spec, fmtLen = (mm) => `${(mm / 1000).toFixed(2)} m`) {
     const L = spec.L / 1000, W = spec.W / 1000, H = spec.H / 1000;
-    this.dims = { L, W, H };
+    this.dims = { L, W, H, base: 0 };
     this.shell.clear();
     this.labels = [];
+    this.envMat = null;
+    if (spec.pallet) {
+      this.buildPallet(spec, fmtLen);
+      this.fitShadow(L, W);
+      return;
+    }
+    this.setGround(-0.031);
 
     const floorTex = this.textures.floor.clone();
     floorTex.needsUpdate = true;
@@ -332,7 +341,17 @@ export class Viewer {
     wid.rotation.z = Math.PI / 2;
     this.shell.add(fr, dr, len, wid);
 
-    // Shadow camera covers the container.
+    this.fitShadow(L, W);
+  }
+
+  setGround(y) {
+    this.groundY = y;
+    this.ground.position.y = y;
+    if (this.grid) this.grid.position.y = y + 0.001;
+  }
+
+  // Shadow camera covers the load area.
+  fitShadow(L, W) {
     const s = this.sun.shadow.camera;
     const ext = Math.max(L, W) / 2 + 2;
     s.left = -ext; s.right = ext; s.top = ext; s.bottom = -ext;
@@ -340,6 +359,57 @@ export class Viewer {
     s.updateProjectionMatrix();
     this.sun.position.set(L * 0.35, 18, W * 3 + 6);
     this.sun.target.position.set(0, 0, 0);
+  }
+
+  // A wooden 48 × 40 style pallet under the load: deck boards across the
+  // width, three stringers along the length, and a dashed outline showing the
+  // maximum stack height. Cartons stand on the deck at y = 0.
+  buildPallet(spec, fmtLen) {
+    const L = spec.L / 1000, W = spec.W / 1000, H = spec.H / 1000;
+    const deck = 0.14; // about 5.5 in of pallet under the cartons
+    const board = 0.016;
+    const stringerH = deck - 2 * board;
+    this.dims.base = -deck;
+    this.setGround(-deck - 0.002);
+
+    const wood = new THREE.MeshStandardMaterial({ color: '#b98b5b', roughness: 0.9 });
+    const add = (sx, sy, sz, x, y, z) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), wood);
+      m.position.set(x, y, z);
+      m.castShadow = true;
+      m.receiveShadow = true;
+      this.shell.add(m);
+    };
+    const bw = 0.14;
+    const n = 7;
+    for (let i = 0; i < n; i++) add(bw, board, W, -L / 2 + bw / 2 + (i * (L - bw)) / (n - 1), -board / 2, 0);
+    for (const z of [-W / 2 + 0.022, 0, W / 2 - 0.022]) add(L, stringerH, 0.044, 0, -board - stringerH / 2, z);
+    for (const x of [-L / 2 + bw / 2, 0, L / 2 - bw / 2]) add(bw, board, W, x, -deck + board / 2, 0);
+
+    const env = new THREE.EdgesGeometry(new THREE.BoxGeometry(L, H, W));
+    env.translate(0, H / 2, 0);
+    this.envMat = new THREE.LineDashedMaterial({ color: token('--scene-edge', '#1d2833'), dashSize: 0.05, gapSize: 0.035, transparent: true, opacity: 0.55 });
+    const outline = new THREE.LineSegments(env, this.envMat);
+    outline.computeLineDistances();
+    this.walls = new THREE.Group();
+    this.walls.add(outline);
+    this.doors = new THREE.Group();
+    this.shell.add(this.walls, this.doors);
+    if (this.wallsOn === false) this.walls.visible = false;
+
+    const label = (text, size, hgt) => {
+      const { tex, aspect } = labelTexture(text, { size });
+      const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, color: token('--scene-label', '#4b5965') });
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(hgt * aspect, hgt), mat);
+      m.rotation.x = -Math.PI / 2;
+      this.labels.push(m);
+      return m;
+    };
+    const size = label(`${fmtLen(spec.L)} × ${fmtLen(spec.W)} pallet`, 52, 0.09);
+    size.position.set(0, this.groundY + 0.002, W / 2 + 0.16);
+    const max = label(`max stack ${fmtLen(spec.H)}`, 52, 0.075);
+    max.position.set(0, this.groundY + 0.002, W / 2 + 0.29);
+    this.shell.add(size, max);
   }
 
   setWallsVisible(v) {
@@ -479,7 +549,8 @@ export class Viewer {
 
     // Closest distance at which every corner of the container (plus a
     // margin) is inside the frustum.
-    const pad = 0.35;
+    const pad = Math.min(0.35, Math.max(L, W) * 0.05);
+    const base = this.dims.base || 0;
     const tanV = Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2);
     const tanH = tanV * cam.aspect;
     const fwd = dir.clone().negate();
@@ -487,7 +558,7 @@ export class Viewer {
     const up = new THREE.Vector3().crossVectors(right, fwd);
     let dist = 0;
     for (const x of [-L / 2 - pad, L / 2 + pad])
-      for (const y of [0, H + 0.1])
+      for (const y of [base, H + 0.1])
         for (const z of [-W / 2 - pad, W / 2 + pad]) {
           const v = new THREE.Vector3(x, y, z).sub(target);
           const depth = v.dot(dir);

@@ -916,3 +916,6 @@ svg { fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round
   .up-pick { height: 34px; }
   .up-opt span { min-width: 36px; }
 }
+
+/* Fifth equipment tile (pallet) spans the row. */
+.equip-grid .equip:last-child:nth-child(odd) { grid-column: 1 / -1; }

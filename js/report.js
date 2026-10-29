@@ -227,7 +227,7 @@ export async function buildPdf(report) {
     doc.addPage();
     compactHeader(doc, report, `${u.label} · Views`);
     const longH = CONTENT_W / u.images.longAspect;
-    viewImage(doc, 'Top view (front wall on the left, doors on the right)', u.images.top, M, 76, CONTENT_W, longH);
+    viewImage(doc, report.topLabel || 'Top view', u.images.top, M, 76, CONTENT_W, longH);
     const sideY = 76 + longH + 26;
     viewImage(doc, 'Side view', u.images.side, M, sideY, CONTENT_W, longH);
     const doorY = sideY + longH + 26;

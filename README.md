@@ -1,16 +1,17 @@
 # Container Load Planner
 
-Plan how cartons fit into a **20' GP, 40' HQ, 45' HQ container or a 53' truckload trailer**, and see the result in 3D.
+Plan how cartons fit into a **20' GP, 40' HQ, 45' HQ container, a 53' truckload trailer or a 48 × 40 pallet**, and see the result in 3D.
 
 A container rated at 65 CBM can be "full" at 60 CBM or still have room at 66 CBM. It depends on the carton sizes. This tool places every carton, so you know before booking.
 
-**Live site:** https://shubhammandotia.github.io/container-load-planner/
+**Live site:** `https://<github-user>.github.io/container-load-planner/` (update this link after the first publish)
 
 ---
 
 ## How to use it
 
-1. **Pick the equipment.** The CBM on each card is the rated capacity used for the % figures (20' = 28, 40' HQ = 65, 45' HQ = 72, 53' TL = 98). Select **Edit CBM & sizes** to change the rated CBM, payload or inside size of any container in one table. Changes are saved in your browser; *Reset all to standard* undoes them.
+1. **Pick the equipment.** The CBM on each card is the rated capacity used for the % figures (20' = 28, 40' HQ = 65, 45' HQ = 72, 53' TL = 98, pallet = 2.27).
+   - **Pallet 48×40:** a standard US pallet. Cartons stack on the 48 × 40 in deck up to **72 in** high (shown as a dashed outline), payload 2,500 lb. All the same rules apply (up side, stackable, nesting). Turn on *Add more units when cargo overflows* to see how many pallets a shipment needs. Select **Edit CBM & sizes** to change the rated CBM, payload or inside size of any container in one table. Changes are saved in your browser; *Reset all to standard* undoes them.
 2. **Add cargo**, one line per carton type:
    - **Add SKU:** enter Units and Case Pack, and Cartons is calculated (Units ÷ Case Pack, rounded up). Or leave Units blank and type Cartons.
    - **Add nested carton:** several SKUs packed in one carton. Add each SKU with its units per carton (e.g. A ×2, B ×1, C ×1), then the number of cartons and the final carton size.

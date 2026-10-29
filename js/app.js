@@ -125,16 +125,30 @@ function metres(mm, ascii = false) {
   }
   return ascii ? `${ft}' ${inch}"` : `${ft}′ ${inch}″`;
 }
-const dimsLabel = (Lmm, Wmm, Hmm) =>
-  state.unitLen === 'cm'
+// Equipment size. Anything under 2.5 m long (a pallet) reads better in
+// plain inches or centimetres.
+const dimsLabel = (Lmm, Wmm, Hmm) => {
+  if (Lmm < 2500) {
+    const u = state.unitLen === 'in' ? (mm) => `${Math.round(mm / 25.4)}″` : (mm) => `${Math.round(mm / 10)}`;
+    return `${u(Lmm)} × ${u(Wmm)} × ${u(Hmm)}${state.unitLen === 'in' ? '' : ' cm'}`;
+  }
+  return state.unitLen === 'cm'
     ? `${(Lmm / 1000).toFixed(2)} × ${(Wmm / 1000).toFixed(2)} × ${(Hmm / 1000).toFixed(2)} m`
     : `${metres(Lmm)} × ${metres(Wmm)} × ${metres(Hmm)}`;
+};
 const cartonLabel = (lcm, wcm, hcm) => `${lenOut(lcm)} × ${lenOut(wcm)} × ${lenOut(hcm)} ${state.unitLen}`;
 
 function spec() {
   const base = byId(state.equipment);
   return { ...base, ...(state.overrides[base.id] || {}) };
 }
+// Rated CBM: two decimals for small units such as a pallet (2.27 CBM).
+const rf = (r) => fmt(r, r < 10 ? 2 : r % 1 ? 1 : 0);
+const isPallet = (s) => !!s.pallet;
+// Ground-label lengths: feet and inches for containers, plain inches (or cm)
+// for a pallet, where 48" × 40" reads better than 4' 0" × 3' 4".
+const sceneLen = (s) => (mm) =>
+  isPallet(s) ? (state.unitLen === 'in' ? `${Math.round(mm / 25.4)}"` : `${Math.round(mm / 10)} cm`) : metres(mm, true);
 const insideCbm = (s) => (s.L * s.W * s.H) / 1e9;
 const itemCbm = (it) => (it.l * it.w * it.h) / 1e6;
 
@@ -206,7 +220,7 @@ function toggleTheme() {
 
 // -------------------------------------------------------------- equipment
 const equipMeta = (e) =>
-  `<span><b>${fmt(e.rated, 0)}</b> CBM rated</span><span><b>${fmt(e.payload / KG_PER[state.unitWt])}</b> ${state.unitWt}</span>`;
+  `<span><b>${rf(e.rated)}</b> CBM rated</span><span><b>${fmt(e.payload / KG_PER[state.unitWt])}</b> ${state.unitWt}</span>`;
 
 function renderEquipment() {
   const maxL = Math.max(...EQUIPMENT.map((e) => e.L));
@@ -233,7 +247,7 @@ function renderCapTable() {
       const changed = !!state.overrides[base.id];
       return `<tr${e.id === state.equipment ? ' class="on"' : ''}>
         <th scope="row"><span class="cap-name">${esc(e.name)}</span>${changed ? '<span class="chip">Edited</span>' : ''}</th>
-        ${cell(e.id, 'rated', trim(e.rated, 1), `${e.name} rated CBM`)}
+        ${cell(e.id, 'rated', trim(e.rated, 2), `${e.name} rated CBM`)}
         ${cell(e.id, 'payload', trim(e.payload / KG_PER[state.unitWt], 0), `${e.name} payload`)}
         ${cell(e.id, 'L', lenOut(e.L / 10), `${e.name} inside length`)}
         ${cell(e.id, 'W', lenOut(e.W / 10), `${e.name} inside width`)}
@@ -253,9 +267,9 @@ function onCapChange(e) {
   inp.classList.toggle('invalid', !ok);
   if (!ok) return;
   const base = byId(id);
-  const next = { ...(state.overrides[id] || {}), [k]: k === 'rated' ? Math.round(v * 10) / 10 : Math.round(v) };
+  const next = { ...(state.overrides[id] || {}), [k]: k === 'rated' ? Math.round(v * 100) / 100 : Math.round(v) };
   // Drop values that match the standard so "Edited" only shows real changes.
-  for (const key of Object.keys(next)) if (Math.abs(next[key] - base[key]) < 0.5 * (key === 'rated' ? 0.1 : 1)) delete next[key];
+  for (const key of Object.keys(next)) if (Math.abs(next[key] - base[key]) < 0.5 * (key === 'rated' ? 0.01 : 1)) delete next[key];
   if (Object.keys(next).length) state.overrides[id] = next;
   else delete state.overrides[id];
   save();
@@ -420,7 +434,7 @@ function updateTotals() {
   const kg = valid.reduce((s, it) => s + (it.weight || 0) * cartonsOf(it), 0);
   const s = spec();
   $('#cargoTotals').innerHTML = state.items.length
-    ? `<span><b>${state.items.length}</b> line${state.items.length === 1 ? '' : 's'}</span><span><b>${fmt(ctns)}</b> cartons</span><span><b>${cbm.toFixed(2)}</b> CBM <span class="num">(${fmt((cbm / s.rated) * 100)}% of ${fmt(s.rated)})</span></span>${kg ? `<span><b>${wtFmt(kg)}</b></span>` : ''}`
+    ? `<span><b>${state.items.length}</b> line${state.items.length === 1 ? '' : 's'}</span><span><b>${fmt(ctns)}</b> cartons</span><span><b>${cbm.toFixed(2)}</b> CBM <span class="num">(${fmt((cbm / s.rated) * 100)}% of ${rf(s.rated)})</span></span>${kg ? `<span><b>${wtFmt(kg)}</b></span>` : ''}`
     : '<span>No cargo yet. Add a SKU, a nested carton, or import a CSV.</span>';
 }
 
@@ -777,7 +791,8 @@ function runPlan({ quiet = false } = {}) {
     mm: packDims(it),
   }));
   const packItems = items.map((it) => ({ l: it.mm.l, w: it.mm.w, h: it.mm.h, qty: it.qty, weight: it.weight || 0, upright: !!it.up, stackable: it.stackable }));
-  const result = planShipment({ L: s.L, W: s.W, H: s.H, payload: s.payload }, packItems, { keepOrder: state.keepOrder, multi: state.multi });
+  // A pallet holds far less than a container, so allow many more units.
+  const result = planShipment({ L: s.L, W: s.W, H: s.H, payload: s.payload }, packItems, { keepOrder: state.keepOrder, multi: state.multi, maxContainers: isPallet(s) ? 300 : 25 });
   plan = { spec: s, items, result, multi: state.multi };
   active = 0;
   filter = null;
@@ -791,7 +806,7 @@ function runPlan({ quiet = false } = {}) {
 
 function refreshAfterSetupChange() {
   updateTotals();
-  viewer.setContainer(spec(), (mm) => metres(mm, true));
+  viewer.setContainer(spec(), sceneLen(spec()));
   if (plan) runPlan({ quiet: true });
   else {
     showLoad();
@@ -824,7 +839,7 @@ function showLoad() {
 function updateBadge() {
   const s = plan?.spec || spec();
   const units = plan?.result.loads.length || 0;
-  $('#vpBadge').innerHTML = `<b>${esc(s.name)}</b><span>${dimsLabel(s.L, s.W, s.H)}</span><span class="num">${fmt(s.rated)} CBM rated</span>${
+  $('#vpBadge').innerHTML = `<b>${esc(s.name)}</b><span>${dimsLabel(s.L, s.W, s.H)}</span><span class="num">${rf(s.rated)} CBM rated</span>${
     units > 1 ? `<span class="chip">Unit ${active + 1} of ${units}</span>` : ''
   }`;
 }
@@ -889,7 +904,7 @@ function showTooltip(hit) {
     ${inside ? `<div class="tt-row"><span>Inside</span><span>${esc(inside)}</span></div>` : ''}
     <div class="tt-row"><span>Carton</span><span>${cartonLabel(it.l, it.w, it.h)}</span></div>
     <div class="tt-row"><span>Placed as</span><span>${orientNote(it, b)}</span></div>
-    <div class="tt-row"><span>From front wall</span><span>${metres(b.x)}</span></div>
+    <div class="tt-row"><span>${isPallet(plan.spec) ? 'From front edge' : 'From front wall'}</span><span>${metres(b.x)}</span></div>
     <div class="tt-row"><span>Height off floor</span><span>${metres(b.z)}</span></div>
     <div class="tt-row"><span>Load step</span><span>${block ? block.step : '–'} · carton ${fmt(b.seq + 1)}</span></div>`;
   tt.hidden = false;
@@ -961,12 +976,12 @@ function renderResults() {
   html += `<div class="res-section">
     <h3><span>Load summary${loads.length > 1 ? ` · unit ${active + 1}` : ''}</span><span class="status ${status[0]}">${status[1]}</span></h3>
     <div class="kpi">
-      <div class="kpi-main"><b>${fmt(pct * 100, 1)}%</b><span>of ${fmt(s.rated)} CBM rated capacity</span></div>
+      <div class="kpi-main"><b>${fmt(pct * 100, 1)}%</b><span>of ${rf(s.rated)} CBM rated capacity</span></div>
       <div class="kpi-side"><b class="num">${cbm.toFixed(2)}</b><span>CBM loaded · ${fmt(cbm * CBM_TO_CFT)} cu ft</span></div>
     </div>
-    <div class="capbar" role="img" aria-label="${cbm.toFixed(1)} CBM loaded of ${fmt(inside, 1)} CBM inside volume; rated ${fmt(s.rated)} CBM">
+    <div class="capbar" role="img" aria-label="${cbm.toFixed(1)} CBM loaded of ${fmt(inside, 1)} CBM inside volume; rated ${rf(s.rated)} CBM">
       <div class="capbar-track"><div class="capbar-fill${cbm > s.rated ? ' over' : ''}" style="width:0;--rated-pct:${(s.rated / cbm) * 100}%" data-w="${fillPct}%"></div><span class="capbar-tick" style="left:${ratedPct}%"></span></div>
-      <div class="capbar-legend"><span class="l-zero">0</span><span class="l-rated" style="left:${ratedPct}%">Rated ${fmt(s.rated)}</span><span class="l-inside">Inside ${fmt(inside, 1)}</span></div>
+      <div class="capbar-legend"><span class="l-zero">0</span><span class="l-rated" style="left:${ratedPct}%">Rated ${rf(s.rated)}</span><span class="l-inside">Inside ${fmt(inside, 1)}</span></div>
     </div>
     <div class="stats">
       ${stat('Cartons', fmt(load.boxes.length), `of ${fmt(totalQty)} planned`, 0, 0)}
@@ -1016,7 +1031,7 @@ function renderResults() {
         </span></button></li>`;
     });
   html += `<div class="res-section"><h3>Stacking plan <span class="chip">${load.blocks.length} steps</span></h3>
-    <p class="sub" style="margin:-4px 0 10px">Load from the front wall towards the doors. Select a step to see it in 3D.</p>
+    <p class="sub" style="margin:-4px 0 10px">${isPallet(s) ? 'Build from one end of the pallet, bottom layer first.' : 'Load from the front wall towards the doors.'} Select a step to see it in 3D.</p>
     <ol class="steps">${steps.join('')}</ol></div>`;
 
   html += `<div class="res-section"><div class="res-actions">
@@ -1046,17 +1061,17 @@ function renderResults() {
       return `<div class="verdict warn">${ICON_OK}<span><b>Needs ${loads.length} × ${esc(s.name)}.</b> All ${fmt(totalQty)} cartons are planned.</span></div>`;
     }
     const freeFloor = s.L - load.usedLength;
-    const floorNote = freeFloor > 50 ? ` ${metres(freeFloor)} of clear floor is left at the doors.` : '';
+    const floorNote = freeFloor > 50 && !isPallet(s) ? ` ${metres(freeFloor)} of clear floor is left at the doors.` : '';
     if (cbm > s.rated) {
-      return `<div class="verdict good">${ICON_OK}<span><b>All ${fmt(totalQty)} cartons fit,</b> ${(cbm - s.rated).toFixed(1)} CBM above the ${fmt(s.rated)} CBM rating. Load by this plan; there's little slack for loose stacking.${floorNote}</span></div>`;
+      return `<div class="verdict good">${ICON_OK}<span><b>All ${fmt(totalQty)} cartons fit,</b> ${(cbm - s.rated).toFixed(2)} CBM above the ${rf(s.rated)} CBM rating. Load by this plan; there's little slack for loose stacking.${floorNote}</span></div>`;
     }
-    return `<div class="verdict good">${ICON_OK}<span><b>All ${fmt(totalQty)} cartons fit.</b> ${(s.rated - cbm).toFixed(1)} CBM left before the ${fmt(s.rated)} CBM rating.${floorNote}</span></div>`;
+    return `<div class="verdict good">${ICON_OK}<span><b>All ${fmt(totalQty)} cartons fit.</b> ${(s.rated - cbm).toFixed(2)} CBM left before the ${rf(s.rated)} CBM rating.${floorNote}</span></div>`;
   }
 }
 
 function summaryText() {
   const { spec: s, items, result } = plan;
-  const lines = [`Load plan: ${result.loads.length > 1 ? `${result.loads.length} × ` : ''}${s.name} (${dimsLabel(s.L, s.W, s.H)} inside, rated ${fmt(s.rated)} CBM)`];
+  const lines = [`Load plan: ${result.loads.length > 1 ? `${result.loads.length} × ` : ''}${s.name} (${dimsLabel(s.L, s.W, s.H)} inside, rated ${rf(s.rated)} CBM)`];
   result.loads.forEach((l, i) => {
     const kg = l.boxes.reduce((a, b) => a + (items[b.item].weight || 0), 0);
     const cbm = l.loadedVolume / 1e9;
@@ -1113,9 +1128,9 @@ function verdictPlain() {
   if (loads.length > 1) return { tone: 'warn', text: `Needs ${loads.length} × ${s.name}. All ${fmt(totalQty)} cartons are planned.` };
   const cbm = loads[0].loadedVolume / 1e9;
   const freeFloor = s.L - loads[0].usedLength;
-  const floor = freeFloor > 50 ? ` ${metres(freeFloor)} of clear floor is left at the doors.` : '';
-  if (cbm > s.rated) return { tone: 'good', text: `All ${fmt(totalQty)} cartons fit, ${(cbm - s.rated).toFixed(1)} CBM above the ${fmt(s.rated)} CBM rating. Load by this plan; there's little slack for loose stacking.${floor}` };
-  return { tone: 'good', text: `All ${fmt(totalQty)} cartons fit. ${(s.rated - cbm).toFixed(1)} CBM left before the ${fmt(s.rated)} CBM rating.${floor}` };
+  const floor = freeFloor > 50 && !isPallet(s) ? ` ${metres(freeFloor)} of clear floor is left at the doors.` : '';
+  if (cbm > s.rated) return { tone: 'good', text: `All ${fmt(totalQty)} cartons fit, ${(cbm - s.rated).toFixed(2)} CBM above the ${rf(s.rated)} CBM rating. Load by this plan; there's little slack for loose stacking.${floor}` };
+  return { tone: 'good', text: `All ${fmt(totalQty)} cartons fit. ${(s.rated - cbm).toFixed(2)} CBM left before the ${rf(s.rated)} CBM rating.${floor}` };
 }
 
 // Image sizes match the PDF slots: a wide 3D view, long top and side views,
@@ -1158,7 +1173,7 @@ function buildReport() {
       images,
       verdict: verdictPlain(),
       kpis: [
-        { label: 'Rated capacity used', value: `${fmt((cbm / s.rated) * 100, 1)}%`, sub: `of ${fmt(s.rated)} CBM rated` },
+        { label: 'Rated capacity used', value: `${fmt((cbm / s.rated) * 100, 1)}%`, sub: `of ${rf(s.rated)} CBM rated` },
         { label: 'CBM loaded', value: cbm.toFixed(2), sub: `${fmt((cbm / inside) * 100)}% of ${fmt(inside, 1)} CBM inside` },
         { label: 'Cartons', value: fmt(load.boxes.length), sub: `of ${fmt(totalQty)} planned` },
         { label: 'Weight', value: kg ? wtFmt(kg) : '-', sub: kg ? `of ${wtFmt(s.payload)} payload` : 'No weights entered' },
@@ -1190,7 +1205,7 @@ function buildReport() {
         }),
       },
       steps: {
-        title: 'Stacking plan (load from the front wall towards the doors)',
+        title: isPallet(s) ? 'Stacking plan (build from one end of the pallet)' : 'Stacking plan (load from the front wall towards the doors)',
         compact: true,
         head: ['Step', 'SKU / carton', 'Cartons', 'Across × high × deep', 'Placed', 'From front', 'To', 'Bottom at'],
         right: [2, 5, 6, 7],
@@ -1222,7 +1237,8 @@ function buildReport() {
     filename: `load-plan-${s.id}${refSlug}-${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.pdf`,
     date: now.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' }),
     reference: state.ref || '',
-    subtitle: `${s.name} (${s.iso}) · inside ${dimsLabel(s.L, s.W, s.H)} · ${fmt(inside, 1)} CBM inside · rated ${fmt(s.rated)} CBM · payload ${wtFmt(s.payload)}`,
+    subtitle: `${s.name} (${s.iso}) · inside ${dimsLabel(s.L, s.W, s.H)} · ${fmt(inside, 1)} CBM inside · rated ${rf(s.rated)} CBM · payload ${wtFmt(s.payload)}`,
+    topLabel: isPallet(s) ? 'Top view' : 'Top view (front wall on the left, doors on the right)',
     footer: `Load Planner · ${s.name}${state.ref ? ` · ${state.ref}` : ''}`,
     units,
     notLoaded: left.length
@@ -1340,7 +1356,7 @@ function bind() {
     syncToggles();
     renderEquipment();
     renderCargo();
-    viewer.setContainer(spec(), (mm) => metres(mm, true));
+    viewer.setContainer(spec(), sceneLen(spec()));
     showLoad();
     renderResults();
   };
@@ -1574,8 +1590,8 @@ syncToggles();
 renderEquipment();
 renderCargo();
 bind();
-viewer.setContainer(spec(), (mm) => metres(mm, true));
-document.fonts?.ready.then(() => viewer.setContainer(spec(), (mm) => metres(mm, true)));
+viewer.setContainer(spec(), sceneLen(spec()));
+document.fonts?.ready.then(() => viewer.setContainer(spec(), sceneLen(spec())));
 setView('iso');
 viewer.setView('iso', false);
 if (state.items.some(validItem)) runPlan({ quiet: true });
