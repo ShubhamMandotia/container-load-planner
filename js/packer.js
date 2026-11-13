@@ -8,7 +8,10 @@
 // It repeatedly takes the space closest to the front wall and fills it with
 // the best "block" of identical cartons (columns stacked to the ceiling, then
 // across the width, then towards the door). Several strategies are tried and
-// the one that loads the most volume wins.
+// the one that loads the most volume wins. When cartons are still left over,
+// the planner keeps searching with small variations of those strategies
+// (always the same ones, so a plan is repeatable) until everything fits or a
+// short time budget runs out.
 
 export function orientations(it) {
   const { l, w, h } = it;
@@ -26,16 +29,43 @@ export function orientations(it) {
 
 const STRATEGIES = ['volume', 'column', 'wall', 'sequence'];
 
+const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+
+// Small deterministic random generator, so the extra search always tries the
+// same variations and the same cargo always gives the same plan.
+function rng(seed) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const isBetter = (r, best) =>
+  !best || r.loadedVolume > best.loadedVolume || (r.loadedVolume === best.loadedVolume && r.usedLength < best.usedLength);
+
 export function packContainer(C, items, opts = {}) {
   const strategies = opts.keepOrder ? ['sequence'] : STRATEGIES;
   let best = null;
   for (const s of strategies) {
     const r = run(C, items, s);
-    if (
-      !best ||
-      r.loadedVolume > best.loadedVolume ||
-      (r.loadedVolume === best.loadedVolume && r.usedLength < best.usedLength)
-    ) best = r;
+    if (isBetter(r, best)) best = r;
+  }
+  if (opts.keepOrder) return best;
+
+  // Extra search, only while cartons are left over: re-run the look-ahead
+  // strategies with each carton type's score nudged up or down a little.
+  const budget = opts.searchMs ?? 150;
+  const maxTries = opts.searchTries ?? 60;
+  const t0 = now();
+  const rand = rng(0x9e3779b9);
+  for (let k = 0; k < maxTries && best.remaining.some((q) => q > 0) && now() - t0 < budget; k++) {
+    const spread = 0.08 + 0.3 * rand();
+    const bias = items.map(() => 1 + (rand() * 2 - 1) * spread);
+    const r = run(C, items, k % 3 === 2 ? 'wall' : 'column', bias);
+    if (isBetter(r, best)) best = r;
   }
   return best;
 }
@@ -46,8 +76,14 @@ export function planShipment(C, items, opts = {}) {
   const maxContainers = opts.multi ? opts.maxContainers || 25 : 1;
   let rem = items.map((it) => it.qty);
   const loads = [];
+  // Keep a whole multi-unit plan responsive: later units get a smaller share
+  // of the extra-search time.
+  const t0 = now();
+  const total = opts.totalSearchMs ?? 1200;
   while (loads.length < maxContainers && rem.some((q) => q > 0)) {
-    const r = packContainer(C, items.map((it, i) => ({ ...it, qty: rem[i] })), opts);
+    const left = Math.max(0, total - (now() - t0));
+    const searchMs = Math.min(opts.searchMs ?? 150, left);
+    const r = packContainer(C, items.map((it, i) => ({ ...it, qty: rem[i] })), { ...opts, searchMs });
     if (r.boxes.length === 0) break;
     loads.push(r);
     rem = r.remaining;
@@ -56,20 +92,26 @@ export function planShipment(C, items, opts = {}) {
   return { loads, unplaced: rem, neverFits };
 }
 
+// A carton can be loaded at all only if it fits inside in an allowed
+// position and, where a door opening is given, can pass through it.
 function fitsEmpty(C, it) {
   if (it.weight > 0 && it.weight > C.payload) return false;
-  return orientations(it).some(([l, w, h]) => l <= C.L && w <= C.W && h <= C.H);
+  const door = C.door;
+  return orientations(it).some(
+    ([l, w, h]) => l <= C.L && w <= C.W && h <= C.H && (!door || (w <= door.W && h <= door.H))
+  );
 }
 
-function run(C, items, strategy) {
+function run(C, items, strategy, bias = null) {
   const types = items.map((it, i) => ({
     i,
+    bias: bias ? bias[i] : 1,
     weight: it.weight || 0,
     stackable: it.stackable !== false,
     vol: it.l * it.w * it.h,
     orients: orientations(it),
   }));
-  const rem = items.map((it) => Math.max(0, it.qty | 0));
+  const rem = items.map((it) => (fitsEmpty(C, it) ? Math.max(0, it.qty | 0) : 0));
   let spaces = [{ x0: 0, y0: 0, z0: 0, x1: C.L, y1: C.W, z1: C.H }];
   spaces = tidy(spaces, types, rem);
   const boxes = [];
@@ -108,11 +150,12 @@ function run(C, items, strategy) {
   const steps = mergeBlocks(blocks, boxes);
   steps.forEach((b, k) => (b.step = k + 1));
 
-  const loaded = items.map((it, i) => (Math.max(0, it.qty | 0)) - rem[i]);
+  const loaded = boxes.reduce((acc, b) => (acc[b.item]++, acc), items.map(() => 0));
+  const remaining = items.map((it, i) => Math.max(0, it.qty | 0) - loaded[i]);
   let usedLength = 0;
   for (const b of boxes) usedLength = Math.max(usedLength, b.x + b.l);
 
-  return { strategy, boxes, blocks: steps, loaded, remaining: rem, loadedVolume: volume, weight, usedLength };
+  return { strategy, boxes, blocks: steps, loaded, remaining, loadedVolume: volume, weight, usedLength };
 }
 
 // Joins identical blocks laid back to back (same carton, pattern, and
@@ -189,7 +232,7 @@ function bestBlock(S, types, rem, capKg, strategy) {
             face += stripFill(avail, sy - ny * w, sz, sx);
             face += stripFill(avail, ny * w, sz - nz * h, sx);
           }
-          const c = { t, o, nx, ny, nz, n, vol: n * t.vol, face: face / (sy * sz), depth: nx * l };
+          const c = { t, o, nx, ny, nz, n, vol: n * t.vol, face: (face / (sy * sz)) * t.bias, depth: nx * l };
           if (better(c, best, strategy)) best = c;
         }
       }

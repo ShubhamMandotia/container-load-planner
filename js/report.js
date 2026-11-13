@@ -1,8 +1,9 @@
-// Builds the load plan PDF. jsPDF and its table plugin are loaded from the
-// CDN the first time someone exports, so they don't slow down the page.
+// Builds the load plan PDF. jsPDF and its table plugin ship with the site
+// (vendor/) and are loaded the first time someone exports, so they don't slow
+// down the page.
 
-const JSPDF_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
-const AUTOTABLE_URL = 'https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js';
+const JSPDF_URL = new URL('../vendor/jspdf.umd.min.js', import.meta.url).href;
+const AUTOTABLE_URL = new URL('../vendor/jspdf.plugin.autotable.min.js', import.meta.url).href;
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {

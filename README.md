@@ -4,14 +4,14 @@ Plan how cartons fit into a **20' GP, 40' HQ, 45' HQ container, a 53' truckload 
 
 A container rated at 65 CBM can be "full" at 60 CBM or still have room at 66 CBM. It depends on the carton sizes. This tool places every carton, so you know before booking.
 
-**Live site:** https://shubhammandotia.github.io/container-load-planner/
+**Live site:** `https://<github-user>.github.io/container-load-planner/` (update this link after the first publish)
 
 ---
 
 ## How to use it
 
-1. **Pick the equipment.** The CBM on each card is the rated capacity used for the % figures (20' = 28, 40' HQ = 65, 45' HQ = 72, 53' TL = 98, pallet = 2.27).
-   - **Pallet 48×40:** a standard US pallet. Cartons stack on the 48 × 40 in deck up to **72 in** high (shown as a dashed outline), payload 2,500 lb. All the same rules apply (up side, stackable, nesting). Turn on *Add more units when cargo overflows* to see how many pallets a shipment needs. Select **Edit CBM & sizes** to change the rated CBM, payload or inside size of any container in one table. Changes are saved in your browser; *Reset all to standard* undoes them.
+1. **Pick the equipment.** The CBM on each card is the rated capacity used for the % figures (20' = 28, 40' HQ = 65, 45' HQ = 72, 53' TL = 98, pallet = 2.08).
+   - **Pallet 48×40:** a standard US pallet. The loaded pallet may stand **72 in tall including the 6 in pallet**, which leaves 66 in for cartons (shown as a dashed outline), payload 2,500 lb. All the same rules apply (up side, stackable, nesting). Turn on *Add more units when cargo overflows* to see how many pallets a shipment needs.
 2. **Add cargo**, one line per carton type:
    - **Add SKU:** enter Units and Case Pack, and Cartons is calculated (Units ÷ Case Pack, rounded up). Or leave Units blank and type Cartons.
    - **Add nested carton:** several SKUs packed in one carton. Add each SKU with its units per carton (e.g. A ×2, B ×1, C ×1), then the number of cartons and the final carton size.
@@ -21,8 +21,10 @@ A container rated at 65 CBM can be "full" at 60 CBM or still have room at 66 CBM
 4. Read the result:
    - % of rated CBM, cartons loaded, weight against payload, and floor length used.
    - What didn't fit, with an option to plan the rest into more containers.
+   - Volume by carton type, weight balance between the front half and the door half, and a warning when the cargo is heavier than the usual US road limit.
    - **Stacking plan:** numbered steps from the front wall to the doors. Select a step or a SKU to highlight it in 3D.
-   - **Loading sequence** slider and play button.
+   - **Loading sequence** slider and play button, and **Look inside** to peel cartons away from the side, top or door end.
+   - A ruler along the floor shows distance from the front wall and how much length the load uses. Keys 1 to 4 switch between the 3D, top, side and door views.
    - Exports: **PDF** load plan, **stacking plan CSV**, and **Copy summary** for emails.
 5. **PDF:** select **PDF** in the 3D toolbar or **Download PDF** under the results. It includes:
    - a summary page with the figures and a large 3D view
@@ -118,16 +120,44 @@ Standard container sizes, payloads and rated CBM are in [`js/containers.js`](js/
 
 ## How the planning works
 
-The planner fills the container from the front wall towards the doors in blocks of identical cartons. It tries several strategies and keeps the one that loads the most. Every carton sits fully on the floor or on other cartons, and orientation, stacking and payload limits are respected. A plan takes milliseconds.
+The planner fills the unit from the front wall towards the doors in blocks of identical cartons. It tries several strategies, then keeps searching with small variations while cartons are left over, and uses the plan that loads the most. The same cargo always gives the same plan. Every carton sits fully on the floor or on other cartons, must be able to pass through the door opening, and orientation, stacking and payload limits are respected.
 
-It was checked against 119 real 40' HC containers from the shipment tracker, using product master carton sizes. It placed every carton in 117 of them, and was within about 1% on the other two. Real loads often run 66–72 CBM in a 40' HC. When the planner says it fits above 65 CBM, it is usually right, but there is little slack for loose stacking.
+It was checked against 119 real 40' HC containers from the shipment tracker, using product master carton sizes. It placed every carton in 118 of them. Real loads often run 66 to 72 CBM in a 40' HC. When the planner says it fits above 65 CBM, it is usually right, but there is little slack for loose stacking.
+
+### Equipment sizes
+
+Inside sizes are the standard published figures (carrier and lessor tables for ISO containers, manufacturer listings for 53' vans). Individual units differ by a few millimetres, so every value can be changed under **Edit CBM & sizes**.
+
+| Unit | Inside L × W × H | Door opening W × H | Payload | US road guide |
+| --- | --- | --- | --- | --- |
+| 20' GP | 5,898 × 2,352 × 2,393 mm | 2,340 × 2,280 mm | 28,200 kg | 38,000 lb |
+| 40' HQ | 12,032 × 2,352 × 2,698 mm | 2,340 × 2,585 mm | 26,580 kg | 44,000 lb |
+| 45' HQ | 13,556 × 2,352 × 2,698 mm | 2,340 × 2,585 mm | 27,700 kg | 44,000 lb |
+| 53' TL | 630 × 100 × 110 in | 98 × 105 in | 45,000 lb | (same) |
+| Pallet | 48 × 40 in, 72 in tall with pallet | n/a | 2,500 lb | n/a |
+
+## Security and privacy
+
+- **Nothing is uploaded.** All planning runs in the visitor's browser. Cargo lists and settings are saved only in that browser.
+- **No third-party code or requests.** The 3D engine, PDF library and fonts are served from this repository (`vendor/`, `fonts/`), so the site makes no calls to other servers.
+- **Content Security Policy.** `index.html` only allows scripts, styles, fonts and images from the site itself. Injected or inline scripts won't run.
+- **Input checks.** Saved data, CSV files and pasted rows are cleaned before use, text is always escaped when shown, and size limits stop an oversized file or a mistyped quantity from freezing the page.
+- **Safe CSV exports.** Cells that Excel would treat as formulas are neutralised.
+- **`_headers`** adds the full set of security headers on hosts that support it (Cloudflare Pages, Netlify). GitHub Pages ignores it and relies on the policy in `index.html`.
+
+On GitHub, also turn on **Settings → Pages → Enforce HTTPS**, and two-factor sign-in on your account.
 
 | File | What it does |
 | --- | --- |
-| `index.html`, `css/styles.css` | Page and styling (light and dark) |
+| `index.html`, `css/styles.css` | Page and styling (dark and light) |
 | `js/app.js` | Screens, units, import/export, results |
 | `js/packer.js` | Load-planning algorithm |
 | `js/viewer.js` | 3D view (Three.js) |
 | `js/containers.js` | Equipment sizes, payloads and rated CBM |
 | `js/csv.js` | CSV reading and writing |
-| `js/report.js` | PDF load plan (jsPDF, loaded from cdnjs on first export) |
+| `js/report.js` | PDF load plan |
+| `js/theme.js` | Applies the saved dark or light theme before the page shows |
+| `vendor/` | Three.js 0.160, OrbitControls, jsPDF 2.5.1, jsPDF-AutoTable 3.8.2 (MIT licences) |
+| `fonts/` | Zalando Sans and Roboto Mono (SIL Open Font and Apache licences) |
+
+Made by Shubham Mandotia.

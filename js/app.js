@@ -1,4 +1,4 @@
-import { EQUIPMENT, byId } from './containers.js';
+import { EQUIPMENT, byId, stackHeight } from './containers.js';
 import { planShipment } from './packer.js';
 import { Viewer } from './viewer.js';
 import { parseTable, toCsv } from './csv.js';
@@ -12,6 +12,13 @@ const LB = 0.45359237;
 const CM_PER = { cm: 1, in: 2.54 };
 const KG_PER = { kg: 1, lb: LB };
 const CBM_TO_CFT = 35.3147;
+
+// Safety limits. They keep a mistyped number or an oversized file from
+// freezing the browser tab.
+const MAX_TEXT = 80; // characters in a SKU, carton name or reference
+const MAX_LINES = 2000; // cargo lines
+const MAX_CARTONS = 150000; // cartons in one plan
+const MAX_FILE_BYTES = 2 * 1024 * 1024; // CSV upload size
 
 let uid = 1;
 const newId = () => `s${Date.now().toString(36)}${(uid++).toString(36)}`;
@@ -34,26 +41,42 @@ const SAMPLE = [
   { kind: 'single', sku: 'AF3598B', units: 58, casePack: 2, l: 16, w: 11.25, h: 26.75, weight: 13.55 },
 ];
 
+// Everything that comes from outside the code (saved data, CSV files, pasted
+// rows) passes through these, so only plain text and sane numbers get in.
+const text = (v) => String(v ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').slice(0, MAX_TEXT);
+const count = (v, max = 10000000) => {
+  const n = Math.floor(Number(v));
+  return Number.isFinite(n) && n > 0 ? Math.min(n, max) : 0;
+};
+const size = (v, max) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, max) : 0;
+};
+const safeId = (v) => (/^[\w-]{1,40}$/.test(String(v ?? '')) ? String(v) : newId());
+const safeColor = (v, fallback) => (/^#[0-9a-f]{6}$/i.test(String(v ?? '')) ? String(v) : fallback);
+
 function normItem(x, color) {
+  x = x && typeof x === 'object' ? x : {};
   return {
-    id: x.id || newId(),
+    id: safeId(x.id),
     kind: x.kind === 'nest' ? 'nest' : 'single',
-    sku: x.sku || '',
-    name: x.name || '',
-    units: x.units || 0,
-    casePack: x.casePack || 0,
-    cartons: x.cartons || 0,
-    contents: (x.contents || []).map((c) => ({ id: c.id || newId(), sku: c.sku || '', pack: c.pack || 0 })),
-    l: x.l || 0,
-    w: x.w || 0,
-    h: x.h || 0,
-    weight: x.weight || 0,
+    sku: text(x.sku),
+    name: text(x.name),
+    units: count(x.units),
+    casePack: count(x.casePack),
+    cartons: count(x.cartons),
+    contents: (Array.isArray(x.contents) ? x.contents : []).slice(0, 50).map((c) => ({ id: safeId(c?.id), sku: text(c?.sku), pack: count(c?.pack, 100000) })),
+    l: size(x.l, 2000),
+    w: size(x.w, 2000),
+    h: size(x.h, 2000),
+    weight: size(x.weight, 50000),
     // Which carton dimension must stand vertical: 'l', 'w', 'h', or '' for
     // any side. Most cartons may be laid on their side, so '' is the default.
     // Older saved data used `upright: true`, which means H up.
     up: ['l', 'w', 'h'].includes(x.up) ? x.up : x.upright === true ? 'h' : '',
     stackable: x.stackable !== false,
-    color: x.color || color,
+    collapsed: x.collapsed === true,
+    color: safeColor(x.color, color),
   };
 }
 
@@ -74,9 +97,32 @@ function loadState() {
   try {
     const raw = localStorage.getItem(STORE_KEY);
     if (!raw) return defaults();
-    const s = { ...defaults(), ...JSON.parse(raw) };
-    s.items = Array.isArray(s.items) ? s.items.map((x, i) => normItem(x, PALETTE[i % PALETTE.length])) : [];
-    return s;
+    const d = defaults();
+    const j = JSON.parse(raw);
+    if (!j || typeof j !== 'object') return d;
+    // Rebuild the state field by field rather than trusting the saved copy.
+    const overrides = {};
+    for (const e of EQUIPMENT) {
+      const o = j.overrides?.[e.id];
+      if (!o || typeof o !== 'object') continue;
+      const clean = {};
+      for (const k of ['L', 'W', 'H', 'payload', 'rated']) {
+        const v = size(o[k], k === 'rated' ? 1000 : 100000);
+        if (v) clean[k] = v;
+      }
+      if (Object.keys(clean).length) overrides[e.id] = clean;
+    }
+    return {
+      equipment: EQUIPMENT.some((e) => e.id === j.equipment) ? j.equipment : d.equipment,
+      overrides,
+      unitLen: j.unitLen === 'cm' ? 'cm' : 'in',
+      unitWt: j.unitWt === 'kg' ? 'kg' : 'lb',
+      keepOrder: j.keepOrder === true,
+      multi: j.multi === true,
+      isSample: j.isSample === true,
+      ref: text(j.ref),
+      items: Array.isArray(j.items) ? j.items.slice(0, MAX_LINES).map((x, i) => normItem(x, PALETTE[i % PALETTE.length])) : [],
+    };
   } catch {
     return defaults();
   }
@@ -142,14 +188,14 @@ function spec() {
   const base = byId(state.equipment);
   return { ...base, ...(state.overrides[base.id] || {}) };
 }
-// Rated CBM: two decimals for small units such as a pallet (2.27 CBM).
+// Rated CBM: two decimals for small units such as a pallet (2.08 CBM).
 const rf = (r) => fmt(r, r < 10 ? 2 : r % 1 ? 1 : 0);
 const isPallet = (s) => !!s.pallet;
 // Ground-label lengths: feet and inches for containers, plain inches (or cm)
 // for a pallet, where 48" × 40" reads better than 4' 0" × 3' 4".
 const sceneLen = (s) => (mm) =>
   isPallet(s) ? (state.unitLen === 'in' ? `${Math.round(mm / 25.4)}"` : `${Math.round(mm / 10)} cm`) : metres(mm, true);
-const insideCbm = (s) => (s.L * s.W * s.H) / 1e9;
+const insideCbm = (s) => (s.L * s.W * stackHeight(s)) / 1e9;
 const itemCbm = (it) => (it.l * it.w * it.h) / 1e6;
 
 // Cartons for a line, and whether that number comes from units ÷ case pack.
@@ -213,8 +259,7 @@ function applyStoredTheme() {
 }
 function toggleTheme() {
   const root = document.documentElement;
-  const dark = root.dataset.theme ? root.dataset.theme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
-  root.dataset.theme = dark ? 'light' : 'dark';
+  root.dataset.theme = root.dataset.theme === 'light' ? 'dark' : 'light';
   try { localStorage.setItem(THEME_KEY, root.dataset.theme); } catch { /* ignore */ }
 }
 
@@ -222,18 +267,41 @@ function toggleTheme() {
 const equipMeta = (e) =>
   `<span><b>${rf(e.rated)}</b> CBM rated</span><span><b>${fmt(e.payload / KG_PER[state.unitWt])}</b> ${state.unitWt}</span>`;
 
+// Side profile of a unit, drawn to one scale across all cards so their
+// lengths and heights compare at a glance.
+function profile(e, maxL) {
+  const k = 150 / maxL;
+  const L = e.L * k;
+  const H = stackHeight(e) * k;
+  const ground = 39;
+  if (e.pallet) {
+    const deck = Math.max(1.4, (e.deck || 150) * k);
+    return `<rect class="body" x="1" y="${ground - deck}" width="${L}" height="${deck}"></rect>
+      <rect class="body" x="1" y="${ground - deck - H}" width="${L}" height="${H}" stroke-dasharray="2 2"></rect>`;
+  }
+  const lift = (e.trailer ? 1220 : 160) * k;
+  const top = ground - lift - H;
+  let ribs = '';
+  for (let x = 7; x < L - 2; x += 6) ribs += `M${1 + x} ${top + 2.5}v${H - 5}`;
+  const gear = e.trailer
+    ? `<circle class="wheel" cx="${1 + L - 13}" cy="${ground - 4.7}" r="4.7"></circle><circle class="wheel" cx="${1 + L - 25}" cy="${ground - 4.7}" r="4.7"></circle><path class="rib" d="M${1 + 27} ${ground - lift}V${ground}"></path>`
+    : '';
+  return `<rect class="body" x="1" y="${top}" width="${L}" height="${H}"></rect><path class="rib" d="${ribs}"></path>${gear}`;
+}
+
 function renderEquipment() {
   const maxL = Math.max(...EQUIPMENT.map((e) => e.L));
   $('#equipGrid').innerHTML = EQUIPMENT.map((base) => {
     const e = { ...base, ...(state.overrides[base.id] || {}) };
     const on = e.id === state.equipment;
-    return `<button type="button" class="equip${on ? ' on' : ''}" role="radio" aria-checked="${on}" data-equip="${e.id}" id="equip-${e.id}">
-      <span class="equip-top"><span class="equip-radio"></span><span class="equip-name">${esc(e.name)}</span><span class="equip-iso">${esc(e.iso)}</span></span>
-      <span class="equip-len" title="Inside length ${metres(e.L)}"><span style="width:${(e.L / maxL) * 100}%"></span></span>
+    return `<button type="button" class="equip${on ? ' on' : ''}" role="radio" aria-checked="${on}" data-equip="${e.id}" id="equip-${e.id}" title="${esc(e.kind)}, inside ${dimsLabel(e.L, e.W, e.H)}">
+      <span class="equip-top"><span class="equip-name">${esc(e.name)}</span><span class="equip-iso">${esc(e.iso)}</span></span>
+      <svg class="equip-profile" viewBox="0 0 160 40" preserveAspectRatio="xMinYMax meet" aria-hidden="true">${profile(e, maxL)}</svg>
       <span class="equip-meta">${equipMeta(e)}</span>
     </button>`;
   }).join('');
-
+  const s = spec();
+  $('#fillLabel').textContent = s.pallet ? 'Build pallet' : s.trailer ? 'Fill trailer' : 'Fill container';
 }
 
 // One table for every equipment type: rated CBM, payload and inside size.
@@ -285,20 +353,14 @@ function onCapChange(e) {
 }
 
 function updateEquipCards() {
-  const maxL = Math.max(...EQUIPMENT.map((e) => e.L));
-  for (const base of EQUIPMENT) {
-    const e = { ...base, ...(state.overrides[base.id] || {}) };
-    const card = document.getElementById(`equip-${e.id}`);
-    if (!card) continue;
-    card.querySelector('.equip-len span').style.width = `${(e.L / maxL) * 100}%`;
-    card.querySelector('.equip-meta').innerHTML = equipMeta(e);
-  }
+  renderEquipment();
 }
 
 // ------------------------------------------------------------------ cargo
 const ICON_UP = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M6 11l6-6 6 6"></path></svg>';
 const ICON_STACK = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l9 5-9 5-9-5z"></path><path d="M3 13l9 5 9-5"></path></svg>';
 const ICON_X = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>';
+const ICON_CHEVRON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"></path></svg>';
 
 const UP_TITLES = {
   '': 'Any side can face up. Cartons may be laid on their side.',
@@ -323,7 +385,9 @@ function cargoCard(it) {
   const num = (k, val, label, mode = 'decimal', extra = '') =>
     `<label for="${f(k)}" data-dim="${k}"${k === it.up ? ' class="is-up"' : ''}><span class="lbl">${label}</span><input class="field num" id="${f(k)}" data-k="${k}" inputmode="${mode}" value="${val}" autocomplete="off" ${extra}></label>`;
   const swatch = `<label class="swatch" style="background:${it.color}" title="Change colour"><input type="color" id="${f('color')}" data-k="color" value="${it.color}" aria-label="Colour for ${esc(labelOf(it))}"></label>`;
-  const del = `<button type="button" class="del" data-del aria-label="Remove ${esc(labelOf(it))}">${ICON_X}</button>`;
+  const del = `<span class="sku-sum" data-sum></span><button type="button" class="del" data-del aria-label="Remove ${esc(labelOf(it))}">${ICON_X}</button>`;
+  const toggle = `<button type="button" class="sku-toggle" data-toggle aria-expanded="${!it.collapsed}" aria-label="Show or hide details for ${esc(labelOf(it))}">${ICON_CHEVRON}</button>`;
+  const cls = it.collapsed ? ' collapsed' : '';
   const dims = `<div class="dims">
       ${num('l', it.l ? lenOut(it.l) : '', `L (${state.unitLen})`)}
       ${num('w', it.w ? lenOut(it.w) : '', `W (${state.unitLen})`)}
@@ -347,13 +411,15 @@ function cargoCard(it) {
         </div>`
       )
       .join('');
-    return `<div class="sku nest" data-id="${it.id}" style="--sku-color:${it.color}">
+    return `<div class="sku nest${cls}" data-id="${it.id}" style="--sku-color:${it.color}">
       <div class="sku-row">
+        ${toggle}
         ${swatch}
         <span class="nest-badge">Nested</span>
         <input class="field sku-name" id="${f('name')}" data-k="name" value="${esc(it.name)}" placeholder="Carton name, e.g. SET-01" aria-label="Nested carton name" autocomplete="off">
         ${del}
       </div>
+      <div class="sku-body">
       <div class="nest-box">
         <div class="nest-head"><span>SKUs in this carton</span><span>Units / ctn</span><span></span></div>
         ${lines}
@@ -365,16 +431,19 @@ function cargoCard(it) {
       </div>
       ${dims}
       ${foot}
+      </div>
     </div>`;
   }
 
   const computed = isComputed(it);
-  return `<div class="sku" data-id="${it.id}" style="--sku-color:${it.color}">
+  return `<div class="sku${cls}" data-id="${it.id}" style="--sku-color:${it.color}">
     <div class="sku-row">
+      ${toggle}
       ${swatch}
       <input class="field sku-name" id="${f('sku')}" data-k="sku" value="${esc(it.sku)}" placeholder="SKU #" aria-label="SKU" autocomplete="off">
       ${del}
     </div>
+    <div class="sku-body">
     <div class="qty-grid">
       ${num('units', it.units || '', 'Units', 'numeric')}
       ${num('casePack', it.casePack || '', 'Case pack', 'numeric')}
@@ -382,6 +451,7 @@ function cargoCard(it) {
     </div>
     ${dims}
     ${foot}
+    </div>
   </div>`;
 }
 
@@ -390,6 +460,7 @@ function renderCargo() {
   state.items.forEach(updateRowInfo);
   updateTotals();
   $('#sampleChip').hidden = !state.isSample;
+  $('#listTools').hidden = state.items.length < 3;
   highlightInvalid();
 }
 
@@ -408,6 +479,7 @@ function updateRowInfo(it) {
   const cbm = itemCbm(it);
   row.querySelector('[data-cbm]').innerHTML =
     cbm > 0 ? `<b>${cbm.toFixed(3)}</b> CBM/ctn${n ? ` · <b>${(cbm * n).toFixed(2)}</b> CBM` : ''}` : '';
+  row.querySelector('[data-sum]').innerHTML = n ? `<b>${fmt(n)}</b> ctns${cbm > 0 ? ` · <b>${(cbm * n).toFixed(2)}</b> CBM` : ''}` : 'no quantity';
 
   const note = row.querySelector('[data-note]');
   let msg = '';
@@ -446,17 +518,17 @@ function onCargoInput(e) {
 
   if (inp.dataset.c) {
     const c = it.contents.find((x) => x.id === inp.closest('[data-cid]').dataset.cid);
-    if (inp.dataset.c === 'sku') c.sku = inp.value;
+    if (inp.dataset.c === 'sku') c.sku = text(inp.value);
     else {
       c.pack = posInt(inp.value);
       inp.classList.toggle('invalid', inp.value.trim() !== '' && !c.pack);
     }
   } else if (inp.dataset.k) {
     const k = inp.dataset.k;
-    if (k === 'sku' || k === 'name') it[k] = inp.value;
+    if (k === 'sku' || k === 'name') it[k] = text(inp.value);
     else if (k === 'color') {
-      it.color = inp.value;
-      row.querySelector('.swatch').style.background = inp.value;
+      it.color = safeColor(inp.value, it.color);
+      row.querySelector('.swatch').style.background = it.color;
       row.style.setProperty('--sku-color', inp.value);
     } else if (k === 'stackable') it[k] = inp.checked;
     else if (k === 'up') {
@@ -502,6 +574,13 @@ function onCargoClick(e) {
   const row = e.target.closest('.sku');
   if (!row) return;
   const it = state.items.find((x) => x.id === row.dataset.id);
+  if (e.target.closest('[data-toggle]')) {
+    it.collapsed = !it.collapsed;
+    row.classList.toggle('collapsed', it.collapsed);
+    e.target.closest('[data-toggle]').setAttribute('aria-expanded', !it.collapsed);
+    save();
+    return;
+  }
   if (e.target.closest('[data-del]') && !e.target.closest('[data-cdel]')) {
     state.items = state.items.filter((x) => x !== it);
     state.isSample = false;
@@ -790,9 +869,17 @@ function runPlan({ quiet = false } = {}) {
     qty: cartonsOf(it),
     mm: packDims(it),
   }));
+  const totalCartons = items.reduce((a, it) => a + it.qty, 0);
+  if (totalCartons > MAX_CARTONS) {
+    toast(`That's ${fmt(totalCartons)} cartons. The planner handles up to ${fmt(MAX_CARTONS)} in one plan; check the quantities or split the shipment.`, 6000);
+    return;
+  }
   const packItems = items.map((it) => ({ l: it.mm.l, w: it.mm.w, h: it.mm.h, qty: it.qty, weight: it.weight || 0, upright: !!it.up, stackable: it.stackable }));
+  // Cartons stack up to the inside height (less the deck, on a pallet) and
+  // must be able to pass through the door opening.
+  const C = { L: s.L, W: s.W, H: stackHeight(s), payload: s.payload, door: s.door };
   // A pallet holds far less than a container, so allow many more units.
-  const result = planShipment({ L: s.L, W: s.W, H: s.H, payload: s.payload }, packItems, { keepOrder: state.keepOrder, multi: state.multi, maxContainers: isPallet(s) ? 300 : 25 });
+  const result = planShipment(C, packItems, { keepOrder: state.keepOrder, multi: state.multi, maxContainers: isPallet(s) ? 300 : 25 });
   plan = { spec: s, items, result, multi: state.multi };
   active = 0;
   filter = null;
@@ -806,7 +893,7 @@ function runPlan({ quiet = false } = {}) {
 
 function refreshAfterSetupChange() {
   updateTotals();
-  viewer.setContainer(spec(), sceneLen(spec()));
+  drawUnit();
   if (plan) runPlan({ quiet: true });
   else {
     showLoad();
@@ -817,6 +904,12 @@ function refreshAfterSetupChange() {
 
 // ------------------------------------------------------------------ viewer
 const viewer = new Viewer($('#scene'), { onHover: showTooltip });
+let peel = { axis: 'none', amount: 0.35 };
+
+function drawUnit() {
+  const s = spec();
+  viewer.setContainer(s, { fmtLen: sceneLen(s), unit: state.unitLen });
+}
 
 function currentLoad() {
   return plan?.result.loads[active] || null;
@@ -826,6 +919,10 @@ function showLoad() {
   const load = currentLoad();
   viewer.setLoad(load, plan?.items || []);
   viewer.setFilter(filter);
+  viewer.setPeel(peel.axis, peel.amount);
+  const sl = sceneLen(plan?.spec || spec());
+  viewer.setUsed(load ? load.usedLength : 0, load ? `${sl(load.usedLength)} used` : '');
+  updateHud();
   $('#vpEmpty').hidden = !!load;
   $('#seqBar').hidden = !load;
   const n = load ? load.boxes.length : 0;
@@ -842,6 +939,25 @@ function updateBadge() {
   $('#vpBadge').innerHTML = `<b>${esc(s.name)}</b><span>${dimsLabel(s.L, s.W, s.H)}</span><span class="num">${rf(s.rated)} CBM rated</span>${
     units > 1 ? `<span class="chip">Unit ${active + 1} of ${units}</span>` : ''
   }`;
+}
+
+// Small readout over the 3D view, so the key figures stay in sight on
+// screens where the results panel is further down the page.
+function updateHud() {
+  const hud = $('#hud');
+  const load = currentLoad();
+  if (!load) {
+    hud.hidden = true;
+    return;
+  }
+  const s = plan.spec;
+  const cbm = load.loadedVolume / 1e9;
+  const kg = load.boxes.reduce((a, b) => a + (plan.items[b.item].weight || 0), 0);
+  hud.innerHTML = `<div class="lead"><span>Fill</span><b>${fmt((cbm / s.rated) * 100, 1)}%</b></div>
+    <div><span>CBM</span><b>${cbm.toFixed(2)}</b></div>
+    <div><span>Cartons</span><b>${fmt(load.boxes.length)}</b></div>
+    ${kg ? `<div><span>Weight</span><b>${wtFmt(kg)}</b></div>` : ''}`;
+  hud.hidden = false;
 }
 
 function updateSeqOut(n) {
@@ -956,6 +1072,31 @@ function renderResults() {
   const inside = insideCbm(s);
   const kg = load.boxes.reduce((a, b) => a + (items[b.item].weight || 0), 0);
   const stackTop = load.boxes.reduce((m, b) => Math.max(m, b.z + b.h), 0);
+  const maxStack = stackHeight(s);
+
+  // What the loaded volume is made of.
+  const parts = items.map((it, i) => ({ it, cbm: load.loaded[i] * itemCbm(it) })).filter((x) => x.cbm > 0);
+  const comp = parts.length > 1
+    ? `<div class="comp"><div class="comp-head"><span class="eyebrow">Volume by carton</span><span>${parts.length} types</span></div>
+        <div class="comp-bar" role="img" aria-label="Share of loaded volume by carton type">${parts
+          .map((x) => `<i style="flex:${x.cbm.toFixed(4)};background:${x.it.color}" title="${esc(x.it.label)}: ${x.cbm.toFixed(2)} CBM (${fmt((x.cbm / cbm) * 100)}%)"></i>`)
+          .join('')}</div></div>`
+    : '';
+
+  // Share of the weight carried in the front half against the door half.
+  let balance = '';
+  if (kg > 0 && !isPallet(s)) {
+    const frontKg = load.boxes.reduce((a, b) => a + (b.x + b.l / 2 < s.L / 2 ? items[b.item].weight || 0 : 0), 0);
+    const f = Math.round((frontKg / kg) * 100);
+    const off = f > 60 || f < 40;
+    balance = `<div class="balance"><div class="comp-head"><span class="eyebrow">Weight balance</span><span>${off ? 'Uneven' : 'Even'}</span></div>
+      <div class="balance-bar${off ? ' off' : ''}" role="img" aria-label="${f} percent of the weight is in the front half"><i style="width:${f}%"></i><i class="rear" style="width:${100 - f}%"></i></div>
+      <div class="balance-legend"><span>Front half ${f}%</span><span>Door half ${100 - f}%</span></div></div>`;
+  }
+  const overRoad = s.roadLimit && kg > s.roadLimit;
+  const roadNote = overRoad
+    ? `<div class="verdict warn">${ICON_WARN}<span><b>Heavy for US roads.</b> ${wtFmt(kg)} of cargo is above the usual ${wtFmt(s.roadLimit)} road limit for a ${esc(s.name)} on a standard chassis. Check with your trucker before loading.</span></div>`
+    : '';
   const status = unplacedQty || result.neverFits.some(Boolean)
     ? ['bad', 'Overflow']
     : loads.length > 1
@@ -980,16 +1121,19 @@ function renderResults() {
       <div class="kpi-side"><b class="num">${cbm.toFixed(2)}</b><span>CBM loaded · ${fmt(cbm * CBM_TO_CFT)} cu ft</span></div>
     </div>
     <div class="capbar" role="img" aria-label="${cbm.toFixed(1)} CBM loaded of ${fmt(inside, 1)} CBM inside volume; rated ${rf(s.rated)} CBM">
-      <div class="capbar-track"><div class="capbar-fill${cbm > s.rated ? ' over' : ''}" style="width:0;--rated-pct:${(s.rated / cbm) * 100}%" data-w="${fillPct}%"></div><span class="capbar-tick" style="left:${ratedPct}%"></span></div>
+      <div class="capbar-track" style="--tick:${((inside > 10 ? 10 : 0.5) / inside) * 100}%"><div class="capbar-fill${cbm > s.rated ? ' over' : ''}" style="width:0;--rated-pct:${(s.rated / cbm) * 100}%" data-w="${fillPct}%"></div><span class="capbar-tick" style="left:${ratedPct}%"></span></div>
       <div class="capbar-legend"><span class="l-zero">0</span><span class="l-rated" style="left:${ratedPct}%">Rated ${rf(s.rated)}</span><span class="l-inside">Inside ${fmt(inside, 1)}</span></div>
     </div>
     <div class="stats">
       ${stat('Cartons', fmt(load.boxes.length), `of ${fmt(totalQty)} planned`, 0, 0)}
       ${stat('Weight', kg ? wtFmt(kg) : '–', kg ? `of ${wtFmt(s.payload)} payload` : 'No weights entered', kg, kg ? s.payload : 0, true)}
       ${stat('Floor used', metres(load.usedLength), `of ${metres(s.L)}`, load.usedLength, s.L)}
-      ${stat('Highest stack', metres(stackTop), `of ${metres(s.H)}`, stackTop, s.H)}
+      ${stat('Highest stack', metres(stackTop), `of ${metres(maxStack)}${isPallet(s) ? ' above the deck' : ''}`, stackTop, maxStack)}
     </div>
+    ${comp}
+    ${balance}
     ${verdict()}
+    ${roadNote}
   </div>`;
 
   const rows = items.map((it, i) => {
@@ -1049,7 +1193,7 @@ function renderResults() {
   function verdict() {
     const never = items.filter((_, i) => result.neverFits[i]);
     if (never.length) {
-      return `<div class="verdict bad">${ICON_WARN}<span><b>${never.map((it) => esc(it.label)).join(', ')}</b> can't fit in a ${esc(s.name)} in any allowed position (too large or too heavy).</span></div>`;
+      return `<div class="verdict bad">${ICON_WARN}<span><b>${never.map((it) => esc(it.label)).join(', ')}</b> can't be loaded on a ${esc(s.name)} in any allowed position: too large for the inside${s.door ? ' or the door opening' : ''}, or too heavy.</span></div>`;
     }
     if (unplacedQty) {
       const weightBound = load && kg > 0 && items.some((it, i) => result.unplaced[i] && it.weight && kg + it.weight > s.payload);
@@ -1178,7 +1322,7 @@ function buildReport() {
         { label: 'Cartons', value: fmt(load.boxes.length), sub: `of ${fmt(totalQty)} planned` },
         { label: 'Weight', value: kg ? wtFmt(kg) : '-', sub: kg ? `of ${wtFmt(s.payload)} payload` : 'No weights entered' },
         { label: 'Floor used', value: metres(load.usedLength), sub: `of ${metres(s.L)}` },
-        { label: 'Highest stack', value: metres(stackTop), sub: `of ${metres(s.H)}` },
+        { label: 'Highest stack', value: metres(stackTop), sub: `of ${metres(stackHeight(s))}` },
       ],
       legend: inUnit.map(({ it, n }) => ({
         color: it.color,
@@ -1275,7 +1419,7 @@ async function exportPdf() {
     toast('PDF downloaded');
   } catch (err) {
     console.error(err);
-    toast("Couldn't create the PDF. Check your internet connection; the PDF tool loads from the web.", 5000);
+    toast("Couldn't create the PDF. Reload the page and try again.", 5000);
   } finally {
     pdfBusy = false;
     [$('#pdfBtn'), $('#pdfBtn2')].filter(Boolean).forEach((b) => {
@@ -1333,6 +1477,11 @@ function openImport() {
 
 function readImportFile(file) {
   if (!file) return;
+  if (file.size > MAX_FILE_BYTES) {
+    $('#importErr').textContent = `${file.name} is too large (limit 2 MB). Split it into smaller files.`;
+    $('#importErr').hidden = false;
+    return;
+  }
   const reader = new FileReader();
   reader.onload = () => {
     $('#importText').value = String(reader.result).replace(/^﻿/, '');
@@ -1356,7 +1505,7 @@ function bind() {
     syncToggles();
     renderEquipment();
     renderCargo();
-    viewer.setContainer(spec(), sceneLen(spec()));
+    drawUnit();
     showLoad();
     renderResults();
   };
@@ -1442,7 +1591,7 @@ function bind() {
   $('#importTemplate').addEventListener('click', template);
 
   $('#optRef').addEventListener('input', (e) => {
-    state.ref = e.target.value.trim();
+    state.ref = text(e.target.value).trim();
     save();
   });
   $('#optOrder').addEventListener('change', (e) => {
@@ -1458,7 +1607,7 @@ function bind() {
 
   $('#fillBtn').addEventListener('click', () => runPlan());
   document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !$('#importDialog').open) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && !document.querySelector('dialog[open]')) {
       e.preventDefault();
       runPlan();
     }
@@ -1471,6 +1620,52 @@ function bind() {
       setView(currentView);
     })
   );
+  $('#dimsBtn').addEventListener('click', (e) => {
+    const btn = e.currentTarget;
+    const on = btn.getAttribute('aria-pressed') !== 'true';
+    btn.setAttribute('aria-pressed', on);
+    viewer.setAnnotationsVisible(on);
+  });
+  $('#fsBtn').addEventListener('click', () => {
+    const stage = $('#stage');
+    if (document.fullscreenElement) document.exitFullscreen();
+    else stage.requestFullscreen?.().catch(() => toast("Full screen isn't available in this browser."));
+  });
+  // Look inside: peel cartons away from one side.
+  const applyPeel = () => {
+    document.querySelectorAll('[data-peel]').forEach((b) => b.classList.toggle('on', b.dataset.peel === peel.axis));
+    $('#peelRange').disabled = peel.axis === 'none';
+    viewer.setPeel(peel.axis, peel.amount);
+  };
+  document.querySelectorAll('[data-peel]').forEach((b) =>
+    b.addEventListener('click', () => {
+      peel.axis = b.dataset.peel;
+      applyPeel();
+    })
+  );
+  $('#peelRange').addEventListener('input', (e) => {
+    peel.amount = +e.target.value / 100;
+    applyPeel();
+  });
+  $('#collapseAll').addEventListener('click', () => {
+    state.items.forEach((it) => (it.collapsed = true));
+    save();
+    renderCargo();
+  });
+  $('#expandAll').addEventListener('click', () => {
+    state.items.forEach((it) => (it.collapsed = false));
+    save();
+    renderCargo();
+  });
+  // Number keys switch the camera when no field is being typed in.
+  document.addEventListener('keydown', (e) => {
+    if (e.ctrlKey || e.metaKey || e.altKey || document.querySelector('dialog[open]')) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName || '')) return;
+    const v = { 1: 'iso', 2: 'top', 3: 'side', 4: 'door' }[e.key];
+    if (!v) return;
+    currentView = v;
+    setView(v);
+  });
   $('#wallsBtn').addEventListener('click', (e) => {
     const btn = e.currentTarget;
     const on = btn.getAttribute('aria-pressed') !== 'true';
@@ -1567,7 +1762,10 @@ function bind() {
       return;
     }
     if ($('#importReplace').checked) state.items = [];
-    items.forEach((x) => addItem(x));
+    const room = MAX_LINES - state.items.length;
+    // Long lists come in collapsed so the cargo panel stays easy to scan.
+    items.slice(0, room).forEach((x) => addItem({ ...x, collapsed: items.length > 6 }));
+    if (items.length > room) errors.push(`${items.length - room} lines over the ${fmt(MAX_LINES)}-line limit`);
     state.isSample = false;
     save();
     renderCargo();
@@ -1590,8 +1788,8 @@ syncToggles();
 renderEquipment();
 renderCargo();
 bind();
-viewer.setContainer(spec(), sceneLen(spec()));
-document.fonts?.ready.then(() => viewer.setContainer(spec(), sceneLen(spec())));
+drawUnit();
+document.fonts?.ready.then(() => drawUnit());
 setView('iso');
 viewer.setView('iso', false);
 if (state.items.some(validItem)) runPlan({ quiet: true });

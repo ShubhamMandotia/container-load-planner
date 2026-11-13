@@ -42,9 +42,17 @@ export function parseTable(text) {
   return rows.filter((r) => r.some((c) => c !== ''));
 }
 
+// Text that starts with = + - or @ would run as a formula when the file is
+// opened in Excel ("CSV injection"), so such cells get a leading apostrophe.
+// Plain numbers, including negative ones, are left alone.
+const safeCell = (v) => {
+  const s = String(v ?? '');
+  return /^[=+\-@\t\r]/.test(s) && !/^-?\d+(\.\d+)?$/.test(s) ? `'${s}` : s;
+};
+
 export function toCsv(rows) {
   const q = (v) => {
-    const s = String(v ?? '');
+    const s = safeCell(v);
     return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return rows.map((r) => r.map(q).join(',')).join('\r\n');

@@ -2,34 +2,28 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<!-- Only files from this site may load or run. No third-party scripts, fonts or trackers. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'">
+<meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
 <title>Container Load Planner</title>
-<meta name="description" content="Plan carton loads for 20' GP, 40' HQ and 45' HQ containers and 53' trailers, with a 3D load view and a step-by-step stacking plan.">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0e14'/%3E%3Cpath d='M7 11h18v11H7z' fill='none' stroke='%237f93ff' stroke-width='2'/%3E%3Cpath d='M11 13.5v6M14.5 13.5v6M18 13.5v6M21.5 13.5v6' stroke='%23fff' stroke-width='1.6'/%3E%3C/svg%3E">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zalando+Sans:wght@200..700&family=Roboto+Mono:wght@400;500&display=swap">
+<meta name="description" content="Plan carton loads for 20' GP, 40' HQ and 45' HQ containers, 53' trailers and pallets, with a 3D load view and a step-by-step stacking plan.">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preload" href="fonts/zalando-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="css/styles.css">
-<script type="importmap">
-{
-  "imports": {
-    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
-  }
-}
-</script>
+<script src="js/theme.js"></script>
 </head>
 <body>
 <header class="topbar">
   <div class="brand">
     <svg class="brand-mark" viewBox="0 0 28 28" aria-hidden="true">
-      <rect x="1" y="1" width="26" height="26" rx="6"></rect>
-      <path class="frame" d="M6 9.5h16v10H6z"></path>
-      <path class="ribs" d="M9.5 12v5M13 12v5M16.5 12v5M20 12v5"></path>
+      <path class="frame" d="M3.5 8.5h21v11h-21z"></path>
+      <path class="ribs" d="M8 11.5v5M12 11.5v5M16 11.5v5M20 11.5v5"></path>
     </svg>
     <span class="brand-name">Load Planner</span>
     <span class="brand-sep" aria-hidden="true"></span>
-    <span class="brand-sub">Container &amp; trailer stuffing</span>
+    <span class="brand-sub">Containers · Trailers · Pallets</span>
   </div>
   <div class="topbar-tools">
     <div class="seg seg-top" role="group" aria-label="Length unit">
@@ -40,8 +34,9 @@
       <button type="button" id="unit-lb" data-unit-wt="lb">lb</button>
       <button type="button" id="unit-kg" data-unit-wt="kg">kg</button>
     </div>
-    <button type="button" class="icon-btn" id="themeBtn" aria-label="Switch light or dark theme" title="Switch theme">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"></path></svg>
+    <button type="button" class="icon-btn" id="themeBtn" aria-label="Switch between dark and light" title="Switch between dark and light">
+      <svg class="i-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9z"></path></svg>
+      <svg class="i-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"></circle><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5L19 19M19 5l-1.5 1.5M6.5 17.5L5 19"></path></svg>
     </button>
   </div>
 </header>
@@ -50,18 +45,18 @@
   <aside class="panel panel-input" aria-label="Load inputs">
     <section class="block">
       <div class="block-head">
-        <h2><span class="step-tag">1</span>Equipment</h2>
+        <h2><span class="step-tag">01</span>Equipment</h2>
         <button type="button" class="text-btn head-clear" id="capBtn">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20h4L19 9l-4-4L4 16z"></path><path d="M13.5 6.5l4 4"></path></svg>
           Edit CBM &amp; sizes
         </button>
       </div>
-      <div class="equip-grid" id="equipGrid" role="radiogroup" aria-label="Container or trailer"></div>
+      <div class="equip-grid" id="equipGrid" role="radiogroup" aria-label="Container, trailer or pallet"></div>
     </section>
 
     <section class="block block-cargo">
       <div class="block-head">
-        <h2><span class="step-tag">2</span>Cargo</h2>
+        <h2><span class="step-tag">02</span>Cargo</h2>
         <span class="chip chip-sample" id="sampleChip" hidden>Example · TEMU7428660</span>
         <button type="button" class="text-btn head-clear" id="clearBtn">Clear</button>
       </div>
@@ -80,6 +75,10 @@
         </button>
       </div>
       <div class="cargo-totals" id="cargoTotals"></div>
+      <div class="list-tools" id="listTools" hidden>
+        <button type="button" class="text-btn" id="collapseAll">Collapse all</button>
+        <button type="button" class="text-btn" id="expandAll">Expand all</button>
+      </div>
       <div class="cargo-list" id="cargoList"></div>
       <div class="add-row">
         <button type="button" class="add-btn" id="addRow">
@@ -94,7 +93,7 @@
     </section>
 
     <section class="block block-options">
-      <div class="block-head"><h2><span class="step-tag">3</span>Load options</h2></div>
+      <div class="block-head"><h2><span class="step-tag">03</span>Load options</h2></div>
       <label class="ref-field" for="optRef">Reference <span>printed on the PDF</span>
         <input class="field" id="optRef" maxlength="80" placeholder="PO #, container # or note" autocomplete="off">
       </label>
@@ -104,64 +103,92 @@
 
     <div class="fill-bar">
       <button type="button" class="btn-primary" id="fillBtn">
-        <span>Fill container</span>
+        <span id="fillLabel">Fill container</span>
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
       </button>
       <span class="fill-hint">Ctrl + Enter</span>
     </div>
   </aside>
 
-  <main class="panel stage" aria-label="3D load view">
+  <main class="panel stage" id="stage" aria-label="3D load view">
     <div class="stage-bar">
       <div class="vp-badge" id="vpBadge"></div>
       <div class="vp-tools">
         <div class="seg" role="group" aria-label="Camera view">
-          <button type="button" data-view="iso" id="view-iso">3D</button>
-          <button type="button" data-view="top" id="view-top">Top</button>
-          <button type="button" data-view="side" id="view-side">Side</button>
-          <button type="button" data-view="door" id="view-door">Doors</button>
+          <button type="button" data-view="iso" id="view-iso" title="3D view (1)">3D</button>
+          <button type="button" data-view="top" id="view-top" title="Top view (2)">Top</button>
+          <button type="button" data-view="side" id="view-side" title="Side view (3)">Side</button>
+          <button type="button" data-view="door" id="view-door" title="Door view (4)">Doors</button>
         </div>
-        <button type="button" class="tool-btn" id="wallsBtn" aria-pressed="true" title="Show or hide walls">
+        <button type="button" class="tool-btn" id="wallsBtn" aria-pressed="true" title="Show or hide the walls">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7l9-4 9 4v10l-9 4-9-4z"></path><path d="M3 7l9 4 9-4M12 11v10"></path></svg>
           <span>Walls</span>
         </button>
-        <button type="button" class="tool-btn" id="pdfBtn" title="Download the load plan as a PDF with every view">
+        <button type="button" class="tool-btn" id="dimsBtn" aria-pressed="true" title="Show or hide the ruler and dimensions">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 16L16 3l5 5L8 21z"></path><path d="M7.5 11.5l2 2M10.5 8.5l2 2M13.5 5.5l2 2"></path></svg>
+          <span>Ruler</span>
+        </button>
+        <button type="button" class="tool-btn icon-only" id="fsBtn" aria-label="Full screen" title="Full screen">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"></path></svg>
+        </button>
+        <button type="button" class="tool-btn strong" id="pdfBtn" title="Download the load plan as a PDF with every view">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6z"></path><path d="M14 3v4h4M12 11v6M9.5 14.5L12 17l2.5-2.5"></path></svg>
           <span>PDF</span>
         </button>
       </div>
     </div>
     <div class="scene" id="scene">
+      <div class="hud" id="hud" hidden></div>
       <div class="vp-empty" id="vpEmpty" hidden>
-        <b>Empty container</b>
-        <span>Add carton sizes and quantities, then select Fill container.</span>
+        <b>Nothing loaded yet</b>
+        <span>Add carton sizes and quantities, then select Fill.</span>
       </div>
       <div class="tooltip" id="tooltip" hidden></div>
       <div class="vp-hint"><span class="hint-mouse">Drag to orbit · Scroll to zoom · Right-drag to pan</span><span class="hint-touch">Drag to orbit · Pinch to zoom · Tap a carton for details</span></div>
     </div>
     <div class="seq-bar" id="seqBar" hidden>
-      <button type="button" class="play" id="playBtn" aria-label="Play loading sequence">
-        <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
-        <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z"></path></svg>
-      </button>
-      <label class="seq-label" for="seqRange">Loading sequence</label>
-      <input type="range" id="seqRange" min="0" max="0" value="0">
-      <output id="seqOut" for="seqRange">0 / 0</output>
+      <div class="seq-group">
+        <button type="button" class="play" id="playBtn" aria-label="Play loading sequence">
+          <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
+          <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5h4v14H7zM13 5h4v14h-4z"></path></svg>
+        </button>
+        <label class="seq-label" for="seqRange">Loading sequence</label>
+        <input type="range" id="seqRange" min="0" max="0" value="0">
+        <output id="seqOut" for="seqRange">0 / 0</output>
+      </div>
+      <div class="seq-group peel">
+        <span class="seq-label" id="peelLabel">Look inside</span>
+        <div class="seg" role="group" aria-labelledby="peelLabel">
+          <button type="button" data-peel="none" id="peel-none" class="on">Off</button>
+          <button type="button" data-peel="side" id="peel-side" title="Remove cartons from the near side">Side</button>
+          <button type="button" data-peel="top" id="peel-top" title="Remove cartons from the top">Top</button>
+          <button type="button" data-peel="door" id="peel-door" title="Remove cartons from the door end">Doors</button>
+        </div>
+        <input type="range" id="peelRange" min="0" max="100" value="35" aria-label="How far to look inside" disabled>
+      </div>
     </div>
   </main>
 
   <aside class="panel panel-results" id="results" aria-label="Load results" aria-live="polite"></aside>
 </div>
 
+<footer class="statusbar">
+  <span class="sb-item">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="1.5"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg>
+    Runs entirely in your browser. Cargo data never leaves this device.
+  </span>
+  <span class="sb-item sb-credit">Made by <b>Shubham Mandotia</b></span>
+</footer>
+
 <dialog id="capDialog" class="dialog dialog-wide">
   <form method="dialog" id="capForm">
     <div class="dialog-head">
-      <h3>Container capacities</h3>
+      <h3>Equipment capacities</h3>
       <button type="button" class="icon-btn plain" id="capClose" aria-label="Close">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"></path></svg>
       </button>
     </div>
-    <p><b>Rated CBM</b> is the practical full load used for every % figure. Inside sizes and payload drive the 3D plan. Changes apply straight away and are saved in this browser.</p>
+    <p><b>Rated CBM</b> is the practical full load used for every % figure. Inside sizes and payload drive the 3D plan. For the pallet, H is the tallest the loaded pallet may stand, pallet included. Changes apply straight away and are saved in this browser.</p>
     <div class="table-wrap">
       <table class="cap-table" id="capTable"></table>
     </div>
